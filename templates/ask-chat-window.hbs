@@ -66,13 +66,24 @@
         }
 
         .msg .bubble ul {
-            padding-left: 1.25em;
+            padding-left: 0 !important;
+            margin-left: 0 !important;
             list-style: disc;
+            list-style-position: inside;
         }
 
         .msg .bubble ol {
-            padding-left: 1.25em;
+            padding-left: 0 !important;
+            margin-left: 0 !important;
             list-style: decimal;
+            list-style-position: inside;
+        }
+
+        /* Override any enriched HTML styles */
+        .msg .bubble ul li,
+        .msg .bubble ol li {
+            padding-left: 0 !important;
+            margin-left: 0 !important;
         }
 
         .msg .bubble code {

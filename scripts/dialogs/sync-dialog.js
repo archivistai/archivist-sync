@@ -192,21 +192,22 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
             }
 
             ui.notifications?.info?.('Archivist sync applied.');
-            // Reload model to refresh the diff/import lists
-            await this._loadModel(true);
             // Force-refresh core directories and any open Archivist windows so UI reflects new docs
             await this._refreshUIAfterSync?.();
+            // Close the dialog after successful sync
+            this.close();
         } catch (error) {
             console.error('[SyncDialog] Sync failed:', error);
             ui.notifications?.error?.('Sync failed. See console for details.');
+            // On error, reload model and stay open so user can retry
+            await this._loadModel(true);
+            await this.render();
         } finally {
             // Resume real-time sync after apply
             try {
                 settingsManager.resumeRealtimeSync?.();
                 console.log('[SyncDialog] ✓ Real-time sync resumed after sync operation');
             } catch (_) { }
-            // Loading state will be set to false by _loadModel
-            await this.render();
         }
     }
 
@@ -476,9 +477,14 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
             await Utils.ensureJournalTextPage(j, htmlContent);
         }
         if (changes.image) {
-            await Utils.ensureJournalLeadImage(j, String(changes.image.to || ''));
+            const imageUrl = String(changes.image.to || '');
+            await Utils.ensureJournalLeadImage(j, imageUrl);
+            // Update the archivist.image flag so diff detection recognizes the change
+            const nextFlags = { ...(f || {}) };
+            nextFlags.image = imageUrl;
+            await j.setFlag(CONFIG.MODULE_ID, 'archivist', nextFlags);
             // Also store on hub flag for sheet previews
-            try { await j.setFlag('archivist-hub', 'image', String(changes.image.to || '')); } catch (_) { }
+            try { await j.setFlag('archivist-hub', 'image', imageUrl); } catch (_) { }
         }
         if (changes.links) {
             const buckets = {

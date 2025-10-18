@@ -131,8 +131,8 @@
   display: block;
 }
 
-/* Add padding to info tab to prevent overlap with edit button */
-.archivist-content .tab[data-tab="info"] {
+/* Add padding to all tabs to prevent overlap with edit button (except Recaps which don't use tabs) */
+.archivist-content .tab {
   padding-top: 40px;
 }
 
