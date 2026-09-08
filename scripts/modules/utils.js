@@ -72,6 +72,23 @@ export class Utils {
       ];
     }
 
+    // Daggerheart (Foundryborne): PCs keep prose under system.biography.*,
+    // while the isNPC data models (adversary, npc, environment, party) expose a
+    // bare system.description.
+    if (sysId === 'daggerheart') {
+      if (isPC)
+        return [
+          'system.biography.background',
+          'system.biography.connections',
+          'system.description',
+        ];
+      return [
+        'system.description',
+        'system.notes',
+        'system.biography.background',
+      ];
+    }
+
     // Generic fallbacks
     return [
       'system.details.biography.value',
@@ -99,6 +116,14 @@ export class Utils {
       if (isPC) return 'system.details.biography.backstory';
       if (isNPC) return 'system.details.publicNotes';
       return 'system.details.publicNotes';
+    }
+
+    // Daggerheart (Foundryborne). Must stay in sync with the projection adapter
+    // and with getActorDescriptionReadPaths(), or a write lands somewhere the
+    // read never looks.
+    if (sysId === 'daggerheart') {
+      if (isPC) return 'system.biography.background';
+      return 'system.description';
     }
 
     // Generic destination

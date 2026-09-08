@@ -43,6 +43,29 @@ const registry = {
       ],
     },
   },
+  // Daggerheart (Foundryborne) keeps prose in a different shape than the
+  // dnd5e-style `system.details.*` tree: PCs use `system.biography.*`, while
+  // every actor type whose data model is flagged isNPC (adversary, npc,
+  // environment, party) exposes a bare `system.description` string. None of the
+  // `common` paths exist here, so without this adapter projection silently
+  // resolves to no slot. Listing both shapes together is safe because the
+  // resolver filters candidates through hasProperty() before scoring them.
+  daggerheart: {
+    id: 'daggerheart',
+    slots: {
+      ...common,
+      Actor: [
+        { path: 'system.biography.background', weight: 120, html: true },
+        { path: 'system.description', weight: 110, html: true },
+        { path: 'system.biography.connections', weight: 90, html: true },
+        { path: 'system.notes', weight: 60, html: true },
+      ],
+      Item: [
+        { path: 'system.description', weight: 100, html: true },
+        ...common.Item,
+      ],
+    },
+  },
 };
 
 export function getAdapter() {
