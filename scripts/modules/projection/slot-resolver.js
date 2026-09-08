@@ -14,6 +14,11 @@ function defaultHeuristics(doc) {
 // discovered by schema probing.
 const PROSE_LEAF_ALLOW =
   /^(description|biography|bio|background|backstory|notes|publicNotes|appearance|summary|value|public)$/i;
+// Generic leaves that are only prose when nested in a known container.
+// `system.value` / `system.public` are often mechanical (price, quantity) and
+// must not be treated as a sheet description just because Array#every is true
+// for an empty ancestor list.
+const GENERIC_PROSE_LEAVES = /^(value|public)$/i;
 // Containers a prose field may legitimately sit inside. Anything else (an
 // action's `attack.description`, an inventory entry, a status effect) is not a
 // sheet description and must never be written to, even when its leaf name looks
@@ -52,6 +57,15 @@ function schemaHeuristics(doc) {
           walk(field, path, depth + 1);
           continue;
         }
+        // v13 systems often wrap nested models in EmbeddedDataField, which is
+        // not always instanceof SchemaField. Only descend when the field
+        // itself is a plausible prose container so we do not walk into
+        // attack / inventory / effect models.
+        const embeddedSchema = field?.model?.schema;
+        if (embeddedSchema?.fields && PROSE_CONTAINER_ALLOW.test(key)) {
+          walk(embeddedSchema, path, depth + 1);
+          continue;
+        }
         const isHtml = !!(
           fields.HTMLField && field instanceof fields.HTMLField
         );
@@ -61,14 +75,14 @@ function schemaHeuristics(doc) {
         if (!isHtml && !isString) continue;
         const segments = path.split('.');
         const leaf = segments[segments.length - 1];
+        const ancestors = segments.slice(0, -1);
         if (!PROSE_LEAF_ALLOW.test(leaf)) continue;
         if (PROSE_PATH_DENY.test(path)) continue;
+        if (GENERIC_PROSE_LEAVES.test(leaf) && !ancestors.length) continue;
         // Every ancestor must be a plausible prose container, so we never
         // target a description belonging to a nested action, item or effect
         // rather than to the sheet itself.
-        if (
-          !segments.slice(0, -1).every((seg) => PROSE_CONTAINER_ALLOW.test(seg))
-        )
+        if (!ancestors.every((seg) => PROSE_CONTAINER_ALLOW.test(seg)))
           continue;
         // Prefer real rich-text fields, and prose-named ones over generic notes.
         let weight = isHtml ? 60 : 40;
