@@ -1,5 +1,13 @@
 import { CONFIG } from './config.js';
 
+/** Daggerheart actor types whose data model exposes a bare `system.description`. */
+const DAGGERHEART_DESCRIPTION_TYPES = new Set([
+  'adversary',
+  'npc',
+  'environment',
+  'party',
+]);
+
 /**
  * Utility functions for Archivist Sync Module
  */
@@ -72,6 +80,29 @@ export class Utils {
       ];
     }
 
+    // Daggerheart (Foundryborne): PCs keep prose under system.biography.*,
+    // while the isNPC data models (adversary, npc, environment, party) expose a
+    // bare system.description. Companions have neither; do not invent a path.
+    if (sysId === 'daggerheart') {
+      if (isPC)
+        return [
+          'system.biography.background',
+          'system.biography.connections',
+          'system.description',
+        ];
+      if (
+        DAGGERHEART_DESCRIPTION_TYPES.has(
+          String(actor?.type || '').toLowerCase()
+        )
+      )
+        return [
+          'system.description',
+          'system.notes',
+          'system.biography.background',
+        ];
+      return [];
+    }
+
     // Generic fallbacks
     return [
       'system.details.biography.value',
@@ -86,7 +117,7 @@ export class Utils {
   /**
    * Compute the preferred WRITE path for projecting an Actor description back into the system.
    * @param {Actor} actor
-   * @returns {string} A dot-path suitable for Actor.update({ [path]: html })
+   * @returns {string|null} A dot-path suitable for Actor.update({ [path]: html }), or null when none exists
    */
   static getActorDescriptionWritePath(actor) {
     const sysId = this.getSystemId();
@@ -99,6 +130,21 @@ export class Utils {
       if (isPC) return 'system.details.biography.backstory';
       if (isNPC) return 'system.details.publicNotes';
       return 'system.details.publicNotes';
+    }
+
+    // Daggerheart (Foundryborne). Must stay in sync with the projection adapter
+    // and with getActorDescriptionReadPaths(), or a write lands somewhere the
+    // read never looks. Companions have no prose field — return null so the
+    // caller reports that rather than updating a non-schema path.
+    if (sysId === 'daggerheart') {
+      if (isPC) return 'system.biography.background';
+      if (
+        DAGGERHEART_DESCRIPTION_TYPES.has(
+          String(actor?.type || '').toLowerCase()
+        )
+      )
+        return 'system.description';
+      return null;
     }
 
     // Generic destination
@@ -169,11 +215,24 @@ export class Utils {
           system: this.getSystemId(),
           actorId: actor?.id,
           actorName: actor?.name,
+          actorType: actor?.type,
           destPath,
           markdownLength: String(markdown ?? '').length,
         }
       );
     } catch (_) {}
+    if (!destPath) {
+      try {
+        console.warn(
+          '[Utils.projectActorDescription] No destination field on this actor type',
+          {
+            system: this.getSystemId(),
+            actorType: actor?.type,
+          }
+        );
+      } catch (_) {}
+      return null;
+    }
     const html = this.markdownToStoredHtml(String(markdown ?? ''));
     await actor.update({ [destPath]: html });
     return destPath;

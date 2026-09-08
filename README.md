@@ -245,10 +245,8 @@ archivist-sync/
 │   │   │   └── page-sheet-v2.js             # DocumentSheetV2 custom sheets (Entry/PC/NPC/Item/Location/Faction/Recap)
 │   │   ├── toc/
 │   │   │   └── toc-window.js                # Archivist Hub window (ApplicationV2)
-│   │   ├── reconcile/
-│   │   │   └── reconcile-service.js         # Full sync reconciliation service
-│   │   └── adapters/
-│   │       └── system-adapter.js            # System-specific field adapters
+│   │   └── reconcile/
+│   │       └── reconcile-service.js         # Full sync reconciliation service
 │   ├── services/
 │   │   └── archivist-api.js                 # API client with throttling and retries
 │   ├── dialogs/
