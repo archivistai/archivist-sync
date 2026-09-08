@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.15] - 2026-09-08
+
 ### Fixed
 - Description projection now resolves a slot on systems other than dnd5e and
   pf2e. The adapter registry only knew those two, and the fallback heuristics
