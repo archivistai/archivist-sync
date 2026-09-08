@@ -25,7 +25,6 @@
     "scripts/modules/config.js",
     "scripts/modules/settings-manager.js",
     "scripts/modules/utils.js",
-    "scripts/modules/adapters/system-adapter.js",
     "scripts/modules/links/helpers.js",
     "scripts/modules/links/indexer.js",
     "scripts/services/archivist-api.js",

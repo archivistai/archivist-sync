@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Description projection now resolves a slot on systems other than dnd5e and
+  pf2e. The adapter registry only knew those two, and the fallback heuristics
+  were themselves dnd5e-shaped, so on any other system every candidate path
+  failed `hasProperty()` and projection silently wrote nothing. Adds a
+  Daggerheart adapter (`system.biography.background` for PCs, bare
+  `system.description` for the isNPC actor types and for items) plus a
+  schema-probing fallback tier that walks the document's own DataModel instead
+  of guessing paths. Generic leaves (`value`, `public`) are only accepted
+  inside a known prose container, so a root-level mechanical `system.value`
+  is never treated as a description. The probe also descends into
+  `EmbeddedDataField` models when the field itself is a prose container.
+  Slot selection for dnd5e and pf2e is unchanged.
+- Projection no longer fails silently: when no slot resolves, the GM gets one
+  notification per system and document type instead of a lone `console.warn`
+  swallowed by the caller's `catch`.
+- `Utils.getActorDescriptionReadPaths()` / `getActorDescriptionWritePath()` know
+  about Daggerheart, so a projected description is read back from the same field
+  it was written to. Companion actors, which have no prose field, now return
+  no path instead of writing to a non-existent `system.description`.
+
+### Removed
+- Dead `SystemAdapter` module (`scripts/modules/adapters/system-adapter.js`) and
+  its `esmodules` entry. Nothing imported it, and it held a third divergent copy
+  of the per-system description path guesses.
+
 ## [1.3.14] - 2026-08-05
 
 ### Added
