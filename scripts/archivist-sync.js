@@ -1362,8 +1362,7 @@ function installRealtimeSyncListeners() {
   const flushArchivistSheetDelete = async (archivistId, bucket) => {
     const survivors = (game.journal?.contents || []).filter((j) => {
       if (bucket.ids.has(String(j.id))) return false;
-      const f = j.getFlag(CONFIG.MODULE_ID, 'archivist') || {};
-      return String(f.archivistId || '') === String(archivistId);
+      return Utils.journalReferencesArchivistId(j, archivistId);
     });
     if (survivors.length) {
       console.log(
