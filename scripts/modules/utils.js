@@ -606,7 +606,7 @@ export class Utils {
       }
     );
     const withoutAutolinks = withoutLinks.replace(
-      /&lt;(https?:\/\/[^&\s<]+)&gt;/gi,
+      /&lt;(https?:\/\/.+?)&gt;/gi,
       (m, href) => {
         const safe = this._safeMarkdownHref(href);
         if (!safe) return m;
@@ -769,7 +769,23 @@ export class Utils {
 
     while (i < lines.length) {
       const m = lines[i].match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
-      if (!m) break;
+      if (!m) {
+        // Soft-wrapped item: indented text with no new marker stays in the
+        // current <li>. A less-indented or blank line ends the list.
+        const cont = String(lines[i]).match(/^(\s+)(\S.*)$/);
+        if (
+          items.length &&
+          cont &&
+          cont[1].length > baseIndent &&
+          !/^\s*(?:#{1,6}\s|>|```|~~~)/.test(lines[i])
+        ) {
+          items[items.length - 1] +=
+            '<br>' + this._renderMarkdownInline(cont[2].trim());
+          i += 1;
+          continue;
+        }
+        break;
+      }
       const indent = m[1].length;
       if (indent < baseIndent) break;
       if (indent > baseIndent) {
@@ -806,9 +822,10 @@ export class Utils {
 
   /**
    * True for stored Foundry HTML, not for Markdown that happens to contain
-   * angle brackets. `<https://example.com>` is a CommonMark autolink and
-   * must go through the Markdown path; the old `startsWith('<')` heuristic
-   * treated it as HTML, skipped rendering, and let cleanHTML drop it.
+   * angle brackets or an inline tag. `<https://example.com>` is a CommonMark
+   * autolink, and `# Title` plus a `<span>` is still Markdown — both must go
+   * through the renderer. The old `startsWith('<')` heuristic treated any
+   * angle bracket as HTML, skipped rendering, and let cleanHTML drop it.
    * @param {string} text
    * @returns {boolean}
    */
@@ -825,7 +842,15 @@ export class Utils {
       .replace(/<https?:\/\/[^>\s]+>/gi, ' ')
       .replace(/<mailto:[^>\s]+>/gi, ' ')
       .replace(/<[^\s<>]+@[^\s<>]+>/g, ' ');
-    return /<\/?(?:p|div|span|br|hr|h[1-6]|ul|ol|li|pre|code|blockquote|strong|em|a|img|table|thead|tbody|tr|td|th|section|article|header|footer|main|aside|figure|figcaption)\b/i.test(
+    // Markdown with an incidental inline tag (`# Title` plus a <span>) must
+    // still go through the renderer. Only a document that *starts* as HTML
+    // and has no Markdown block syntax is treated as stored HTML.
+    if (
+      /^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>\s|`{3,}|~{3,})/m.test(withoutAutolinks)
+    ) {
+      return false;
+    }
+    return /^\s*<\/?(?:p|div|span|br|hr|h[1-6]|ul|ol|li|pre|code|blockquote|strong|em|a|img|table|thead|tbody|tr|td|th|section|article|header|footer|main|aside|figure|figcaption)\b/i.test(
       withoutAutolinks
     );
   }
