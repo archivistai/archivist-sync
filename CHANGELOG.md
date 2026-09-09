@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Imported Journal sheets rendered their body squeezed into the narrow left
+  column instead of the page area. `journal.hbs` has no `<aside>`, but the base
+  `.archivist-sheet` grid (`180px 1fr`) still applied, so its lone `<main>` was
+  placed in the sidebar track. Recap escaped this via a
+  `.archivist-sheet-recap-simple` override that the journal sheet never got.
+  Both templates now carry a shared `.archivist-sheet-full` modifier, so any
+  future sidebar-less sheet gets the single-column layout by construction.
+- Re-running World Setup created a second JournalEntry for every Archivist
+  record it had already imported. `createCustomJournalForImport` now adopts an
+  existing sheet with the same `archivistId` instead of creating a rival, which
+  covers every caller (world setup, sync dialog) at once.
+- Deleting a Foundry sheet no longer silently hard-deletes the Archivist record
+  it points at. When other sheets still reference the same `archivistId` — the
+  duplicate case above — only the local copy is removed. When it is the last
+  sheet for that record, the GM is asked first and can keep the Archivist copy.
+  Previously, deleting a duplicate destroyed the shared upstream record, and
+  the next sync then deleted the surviving sheet as an orphan.
+- "Select All" in the sync dialog no longer arms deletion rows; deletions stay
+  an explicit per-row choice. Declining the deletion confirmation now applies
+  the rest of the sync instead of abandoning the whole run.
+- Journal bodies imported as one run-on paragraph with headings and bullets
+  lost. The module now requests `format=markdown` from `/journals`, and the
+  built-in markdown renderer (used when no `markdown-it` global is present)
+  understands headings, ordered/unordered/nested lists, blockquotes, fenced
+  code and horizontal rules rather than only paragraphs.
+- A Journal's body is read from `content`; the previous
+  `description || summary || content` order imported its short `summary` blurb
+  as the whole entry.
+
 ## [1.3.15] - 2026-09-08
 
 ### Fixed

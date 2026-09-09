@@ -1431,6 +1431,46 @@ function installRealtimeSyncListeners() {
       const st = String(flags?.sheetType || '').toLowerCase();
       if (!id) return;
       if (st === 'recap') return; // Never create/delete recaps
+
+      // Two sheets can point at one Archivist record (a duplicate import, a
+      // copy/paste in the directory). Deleting one of them must not delete the
+      // record the survivors still represent.
+      const siblings = (game.journal?.contents || []).filter((j) => {
+        if (j.id === entry.id) return false;
+        const f = j.getFlag(CONFIG.MODULE_ID, 'archivist') || {};
+        return String(f.archivistId || '') === String(id);
+      });
+      if (siblings.length) {
+        console.log(
+          '[RTS] Skipping Archivist delete: other sheets still reference this record',
+          { archivistId: id, remaining: siblings.length }
+        );
+        ui.notifications?.info?.(
+          `Removed the duplicate sheet. "${entry.name}" is still in Archivist — ${siblings.length} other sheet${siblings.length > 1 ? 's' : ''} still reference${siblings.length > 1 ? '' : 's'} it.`
+        );
+        return;
+      }
+
+      // Deleting the last sheet for a record deletes it in Archivist, for every
+      // other member of the campaign, and Archivist has no undo. Ask first.
+      const confirmed = await foundry.applications.api.DialogV2.confirm({
+        window: { title: 'Delete from Archivist?' },
+        content:
+          `<p>This is the only Foundry sheet for <strong>${foundry.utils.escapeHTML(entry.name || 'this record')}</strong>.</p>` +
+          `<p>Deleting it here also <strong>permanently deletes it from Archivist</strong> for everyone in the campaign. This cannot be undone.</p>` +
+          `<p>Delete from Archivist too, or keep the Archivist record and only remove the Foundry sheet?</p>`,
+        yes: { label: 'Delete from Archivist', icon: 'fa-solid fa-trash' },
+        no: { label: 'Keep in Archivist', icon: 'fa-solid fa-cloud' },
+        defaultYes: false,
+        rejectClose: false,
+      });
+      if (!confirmed) {
+        console.log('[RTS] GM kept the Archivist record; only the Foundry sheet is removed', {
+          archivistId: id,
+        });
+        return;
+      }
+
       if (
         (st === 'pc' || st === 'npc' || st === 'character') &&
         archivistApi.deleteCharacter

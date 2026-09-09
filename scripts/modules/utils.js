@@ -519,6 +519,184 @@ export class Utils {
    * @param {string} markdown
    * @returns {string} sanitized HTML
    */
+  /**
+   * Render inline markdown (emphasis, code, backslash escapes) to HTML.
+   * Escapes HTML first so generated tags are not re-escaped into literal text.
+   * @param {string} text
+   * @returns {string}
+   */
+  static _renderMarkdownInline(text) {
+    const escaped = foundry.utils.escapeHTML(String(text ?? ''));
+    // Park backslash-escaped characters so they are not read as emphasis, then
+    // restore them bare once the emphasis passes have run.
+    const parked = [];
+    const withoutEscapes = escaped.replace(
+      /\\([\\`*_[\]#>+.\-!()])/g,
+      (_m, ch) => ' ' + (parked.push(ch) - 1) + ' '
+    );
+    const formatted = withoutEscapes
+      .replace(/`([^`]+?)`/g, '<code>$1</code>')
+      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/~~(.+?)~~/g, '<s>$1</s>')
+      .replace(/(?<!\w)[*_](?=\S)(.+?)(?<=\S)[*_](?!\w)/g, '<em>$1</em>');
+    return formatted.replace(/ (\d+) /g, (_m, i) => parked[Number(i)]);
+  }
+
+  /**
+   * Block-level markdown renderer used when no markdown-it global is present.
+   * Covers the subset Archivist emits: ATX headings, bullet/ordered lists,
+   * blockquotes, fenced code, horizontal rules and paragraphs. A
+   * paragraph-only fallback rendered these as literal '# ' and '- ' text.
+   * @param {string} markdown
+   * @returns {string}
+   */
+  static _renderMarkdownFallback(markdown) {
+    const lines = String(markdown ?? '')
+      .replace(/\r\n/g, '\n')
+      .split('\n');
+    const out = [];
+    let i = 0;
+
+    const isBlank = (l) => !String(l).trim();
+    const isBlockStart = (l) =>
+      /^\s*(?:#{1,6}\s|>|```)/.test(l) ||
+      /^\s*(?:[-*+]|\d+[.)])\s+/.test(l) ||
+      /^\s*(?:[-*_]\s*){3,}$/.test(l);
+
+    while (i < lines.length) {
+      const line = lines[i];
+
+      if (isBlank(line)) {
+        i += 1;
+        continue;
+      }
+
+      // Fenced code — verbatim, no inline processing.
+      const fence = line.match(/^\s*```(\w*)\s*$/);
+      if (fence) {
+        const body = [];
+        i += 1;
+        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+          body.push(lines[i]);
+          i += 1;
+        }
+        i += 1; // closing fence
+        const cls = fence[1] ? ' class="language-' + fence[1] + '"' : '';
+        out.push(
+          '<pre><code' +
+            cls +
+            '>' +
+            foundry.utils.escapeHTML(body.join('\n')) +
+            '</code></pre>'
+        );
+        continue;
+      }
+
+      const heading = line.match(/^\s*(#{1,6})\s+(.*)$/);
+      if (heading) {
+        const level = heading[1].length;
+        out.push(
+          '<h' +
+            level +
+            '>' +
+            this._renderMarkdownInline(heading[2].trim()) +
+            '</h' +
+            level +
+            '>'
+        );
+        i += 1;
+        continue;
+      }
+
+      if (/^\s*(?:[-*_]\s*){3,}$/.test(line)) {
+        out.push('<hr>');
+        i += 1;
+        continue;
+      }
+
+      if (/^\s*>\s?/.test(line)) {
+        const body = [];
+        while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+          body.push(lines[i].replace(/^\s*>\s?/, ''));
+          i += 1;
+        }
+        out.push(
+          '<blockquote><p>' +
+            this._renderMarkdownInline(body.join('\n')).replace(/\n/g, '<br>') +
+            '</p></blockquote>'
+        );
+        continue;
+      }
+
+      if (/^\s*(?:[-*+]|\d+[.)])\s+/.test(line)) {
+        out.push(this._renderMarkdownList(lines, i, 0));
+        i = this._lastListIndex;
+        continue;
+      }
+
+      // Paragraph: accumulate until a blank line or the start of another block.
+      const body = [];
+      while (i < lines.length && !isBlank(lines[i]) && !isBlockStart(lines[i])) {
+        body.push(lines[i]);
+        i += 1;
+      }
+      out.push(
+        '<p>' +
+          this._renderMarkdownInline(body.join('\n')).replace(/\n/g, '<br>') +
+          '</p>'
+      );
+    }
+
+    return out.join('');
+  }
+
+  /**
+   * Render a (possibly nested) markdown list starting at `start`.
+   * Sets `_lastListIndex` to the first line after the list.
+   * @param {string[]} lines
+   * @param {number} start
+   * @param {number} depth
+   * @returns {string}
+   */
+  static _renderMarkdownList(lines, start, depth) {
+    let i = start;
+    const first = lines[i].match(/^(\s*)([-*+]|\d+[.)])\s+/);
+    const baseIndent = first[1].length;
+    const ordered = /\d/.test(first[2]);
+    const items = [];
+
+    // Guard against a malformed document nesting without end.
+    if (depth > 8) {
+      this._lastListIndex = i + 1;
+      return '';
+    }
+
+    while (i < lines.length) {
+      const m = lines[i].match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+      if (!m) break;
+      const indent = m[1].length;
+      if (indent < baseIndent) break;
+      if (indent > baseIndent) {
+        // Nested list — fold it into the item just opened.
+        const nested = this._renderMarkdownList(lines, i, depth + 1);
+        i = this._lastListIndex;
+        if (items.length) items[items.length - 1] += nested;
+        else items.push(nested);
+        continue;
+      }
+      if (/\d/.test(m[2]) !== ordered) break;
+      items.push(this._renderMarkdownInline(m[3].trim()));
+      i += 1;
+    }
+
+    this._lastListIndex = i;
+    const tag = ordered ? 'ol' : 'ul';
+    return (
+      '<' + tag + '>' + items.map((it) => '<li>' + it + '</li>').join('') + '</' + tag + '>'
+    );
+  }
+
   static markdownToStoredHtml(markdown) {
     const md = String(markdown ?? '');
     try {
@@ -552,23 +730,11 @@ export class Utils {
         });
         rawHtml = mdIt.render(md);
       } else {
-        // Minimal fallback: escape first, then apply lightweight markdown formatting
-        // so generated tags are not re-escaped into visible literal text.
-        const renderInline = (text) =>
-          foundry.utils
-            .escapeHTML(String(text ?? ''))
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            .replace(/_(.+?)_/g, '<em>$1</em>')
-            .replace(/`(.+?)`/g, '<code>$1</code>')
-            .replace(/\n/g, '<br>');
-
-        rawHtml = md
-          .replace(/\r\n/g, '\n')
-          .split(/\n{2,}/)
-          .map((p) => p.trim())
-          .filter(Boolean)
-          .map((p) => `<p>${renderInline(p)}</p>`)
-          .join('');
+        // Minimal fallback for worlds where no markdown-it global exists. It has
+        // to cover block syntax, not just paragraphs: Archivist journals use
+        // headings and bullet lists, and a paragraph-only renderer emitted
+        // those as literal '# ' and '- ' text.
+        rawHtml = this._renderMarkdownFallback(md);
       }
       return foundry?.utils?.TextEditor?.cleanHTML
         ? foundry.utils.TextEditor.cleanHTML(rawHtml)
@@ -1257,6 +1423,25 @@ export class Utils {
   }
 
   /** Create a custom sheet JournalEntry for an imported Archivist entity */
+  /**
+   * Find the JournalEntry that represents a given Archivist record, if any.
+   * @param {string} archivistId
+   * @returns {JournalEntry|null}
+   */
+  static findJournalByArchivistId(archivistId) {
+    const wanted = String(archivistId || '');
+    if (!wanted) return null;
+    try {
+      for (const j of game.journal?.contents || []) {
+        const flags = j.getFlag(CONFIG.MODULE_ID, 'archivist') || {};
+        if (String(flags.archivistId || '') === wanted) return j;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    return null;
+  }
+
   static async createCustomJournalForImport({
     name,
     html = '',
@@ -1290,6 +1475,43 @@ export class Utils {
       });
 
       const targetFolderId = folderId || folder?.id || null;
+
+      // An Archivist id identifies exactly one sheet. Re-running World Setup
+      // used to create a second JournalEntry for every record it had already
+      // imported, and because both copies carried the same archivistId,
+      // deleting either duplicate cascaded a delete of the shared Archivist
+      // record. Adopt the existing sheet instead of creating a rival.
+      const existing = archivistId
+        ? this.findJournalByArchivistId(archivistId)
+        : null;
+      if (existing) {
+        console.log('[Archivist Sync] Reusing existing journal for import:', {
+          journalId: existing.id,
+          archivistId,
+          sheetType: normalizedType,
+        });
+        const updates = {};
+        if (name && existing.name !== name) updates.name = name;
+        if (imageUrl && existing.img !== imageUrl) updates.img = imageUrl;
+        if (typeof sort === 'number' && existing.sort !== sort) updates.sort = sort;
+        if (targetFolderId && (existing.folder?.id || null) !== targetFolderId) {
+          updates.folder = targetFolderId;
+        }
+        if (Object.keys(updates).length) {
+          await existing.update(updates, { render: false });
+        }
+        await this.ensureJournalTextPage(existing, html);
+        const priorFlags = existing.getFlag(CONFIG.MODULE_ID, 'archivist') || {};
+        await existing.setFlag(CONFIG.MODULE_ID, 'archivist', {
+          ...priorFlags,
+          sheetType: normalizedType,
+          archivistId,
+          archivistWorldId: worldId || priorFlags.archivistWorldId || null,
+          image: imageUrl || priorFlags.image || null,
+        });
+        return existing;
+      }
+
       const createData = {
         name,
         folder: targetFolderId,

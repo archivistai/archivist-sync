@@ -1183,6 +1183,11 @@ export class ArchivistApiService {
    * @param {string} campaignId
    * @returns {Promise<{success:boolean,data:Array}>}
    */
+  // `format=markdown` keeps headings, lists and paragraph breaks in `content`.
+  // The default `text` form flattens the Lexical document to bare lines and
+  // concatenates list items with no separator, so an imported journal arrived
+  // in Foundry as one run-on paragraph. Older API builds ignore the unknown
+  // query param and simply return the flattened form as before.
   async listJournals(apiKey, campaignId) {
     try {
       let page = 1;
@@ -1191,7 +1196,7 @@ export class ArchivistApiService {
       while (true) {
         const data = await this._request(
           apiKey,
-          `/journals?campaign_id=${encodeURIComponent(campaignId)}&page=${page}&size=${size}`,
+          `/journals?campaign_id=${encodeURIComponent(campaignId)}&page=${page}&size=${size}&format=markdown`,
           { method: 'GET' }
         );
         const items = Array.isArray(data)
@@ -1226,7 +1231,7 @@ export class ArchivistApiService {
     try {
       const data = await this._request(
         apiKey,
-        `/journals/${encodeURIComponent(journalId)}`,
+        `/journals/${encodeURIComponent(journalId)}?format=markdown`,
         { method: 'GET' }
       );
       return { success: true, data };
