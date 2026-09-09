@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.16] - 2026-09-09
+
 ### Fixed
 - Imported Journal sheets rendered their body squeezed into the narrow left
   column instead of the page area. `journal.hbs` has no `<aside>`, but the base
