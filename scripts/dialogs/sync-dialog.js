@@ -8,38 +8,6 @@ import { Utils } from '../modules/utils.js';
  * Phase 1: Diffs for linked sheets (text, image, links, deletions)
  * Phase 2: Unlinked Archivist docs with import options (and optional core Actor/Item/Scene creation)
  */
-/**
- * Resolve the prose body for an Archivist record.
- *
- * Field naming differs per type: compendium entities use `description`,
- * Sessions put their recap in `summary`, and Journals keep the body in
- * `content` with `summary` holding only a short blurb — so a single
- * `description || summary || content` chain imports a Journal's blurb as if it
- * were the whole entry.
- *
- * @param {string} type Archivist record type ('Journal', 'Session', ...)
- * @param {object} row
- * @returns {string}
- */
-function firstPresent(...values) {
-  for (const value of values) {
-    if (value != null) return String(value);
-  }
-  return '';
-}
-
-function archivistBodyText(type, row) {
-  if (!row) return '';
-  // Prefer an explicit empty string over a fallback. A Journal with
-  // `content: ""` and a nonempty `summary` blurb must stay empty — `||`
-  // would re-import the blurb as the whole body, which this helper exists
-  // to prevent.
-  if (String(type) === 'Journal') {
-    return firstPresent(row.content, row.description, row.summary);
-  }
-  return firstPresent(row.description, row.summary, row.content);
-}
-
 export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMixin(
   foundry.applications.api.ApplicationV2
 ) {
@@ -494,6 +462,21 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
     );
   }
 
+  /**
+   * Compare stored HTML while keeping tags, so `# Title` vs `Title` is a
+   * real journal change instead of collapsing to the same plain text.
+   * @param {string} html
+   * @returns {string}
+   */
+  _normalizeHtmlForComparison(html) {
+    return String(html ?? '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/[^\S\n]+/g, ' ')
+      .replace(/>\s+</g, '><')
+      .trim();
+  }
+
   /** Normalize quest objectives for stable JSON comparison. */
   _normalizeQuestObjectives(arr) {
     return JSON.stringify(
@@ -734,25 +717,35 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
             /* ignore */
           }
         } else {
+          // Description mapping: Foundry HTML vs Archivist Markdown
           try {
             const textPage =
               (j?.pages?.contents || []).find((p) => p.type === 'text') || null;
             const stored = Utils.extractPageHtml(textPage) || '';
-            const foundryPlain = Utils.toMarkdownIfHtml(stored);
-            const archMd = archivistBodyText(type, arch);
+            const archMd = Utils.archivistBodyText(type, arch);
             const archHtml = Utils.markdownToStoredHtml(archMd);
-            const archivistPlain = Utils.toMarkdownIfHtml(archHtml);
 
-            // Normalize both sides for comparison to handle newline/whitespace differences
-            const foundryNormalized =
-              this._normalizeTextForComparison(foundryPlain);
-            const archivistNormalized =
-              this._normalizeTextForComparison(archivistPlain);
-
-            if (
-              archivistNormalized &&
-              foundryNormalized !== archivistNormalized
-            ) {
+            // Journals now arrive as Markdown specifically to restore
+            // headings/lists. Compare rendered HTML so `Title` vs `# Title`
+            // is a real change, and allow an explicit empty Archivist body
+            // to clear a stale Foundry page.
+            let differs;
+            if (String(type) === 'Journal') {
+              differs =
+                this._normalizeHtmlForComparison(stored) !==
+                this._normalizeHtmlForComparison(archHtml);
+            } else {
+              const foundryNormalized = this._normalizeTextForComparison(
+                Utils.toMarkdownIfHtml(stored)
+              );
+              const archivistNormalized = this._normalizeTextForComparison(
+                Utils.toMarkdownIfHtml(archHtml)
+              );
+              differs = !!(
+                archivistNormalized && foundryNormalized !== archivistNormalized
+              );
+            }
+            if (differs) {
               changes.description = { from: stored, to: archMd };
             }
           } catch (_) {
@@ -890,7 +883,7 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
           type,
           id,
           name: row.character_name || row.name || row.title || 'Untitled',
-          description: archivistBodyText(type, row),
+          description: Utils.archivistBodyText(type, row),
           image: row.image || '',
           selected: false,
           createCore: false,
@@ -1084,7 +1077,7 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
                     : null;
     if (!sheetType) return;
     // Convert markdown from Archivist to HTML for Foundry storage (sessions use summary)
-    const markdownContent = archivistBodyText(row.type, row);
+    const markdownContent = Utils.archivistBodyText(row.type, row);
     const htmlContent = Utils.markdownToStoredHtml(markdownContent);
 
     // Determine folder ID based on sheet type using saved destinations
@@ -1390,7 +1383,7 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
               else if (itemId) targetDoc = game.items?.get?.(itemId) || null;
               else if (sceneId) targetDoc = game.scenes?.get?.(sceneId) || null;
 
-              const md = archivistBodyText(row.type, row);
+              const md = Utils.archivistBodyText(row.type, row);
               const html = Utils.markdownToStoredHtml(md);
 
               if (targetDoc) {

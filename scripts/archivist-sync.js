@@ -1357,6 +1357,7 @@ function installRealtimeSyncListeners() {
   // registered. A bulk delete of duplicate sheets otherwise sees each sibling
   // still in game.journal and skips the remote delete for all of them.
   const pendingSheetDeletes = new Map();
+  let flushChain = Promise.resolve();
 
   const flushArchivistSheetDelete = async (archivistId, bucket) => {
     const survivors = (game.journal?.contents || []).filter((j) => {
@@ -1435,9 +1436,13 @@ function installRealtimeSyncListeners() {
         pendingSheetDeletes.set(id, bucket);
         queueMicrotask(() => {
           pendingSheetDeletes.delete(id);
-          void flushArchivistSheetDelete(id, bucket).catch((e) =>
-            console.warn('[RTS] preDeleteJournalEntry failed', e)
-          );
+          // Distinct records each get their own bucket; run their confirms
+          // one after another so a multi-select delete does not open a
+          // stack of destructive DialogV2 windows at once.
+          flushChain = flushChain
+            .catch(() => {})
+            .then(() => flushArchivistSheetDelete(id, bucket))
+            .catch((e) => console.warn('[RTS] preDeleteJournalEntry failed', e));
         });
       }
       bucket.ids.add(String(entry.id));

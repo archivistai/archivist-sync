@@ -2490,7 +2490,9 @@ export class WorldSetupDialog extends foundry.applications.api.HandlebarsApplica
             const folderId = j.folder_id
               ? folderIdMap.get(String(j.folder_id)) || journalRootFolderId
               : journalRootFolderId;
-            const html = Utils.toMarkdownIfHtml(String(j.content || j.summary || ''));
+            const html = Utils.markdownToStoredHtml(
+              Utils.archivistBodyText('Journal', j)
+            );
             const imageUrl =
               typeof j.cover_image === 'string' && j.cover_image.trim()
                 ? j.cover_image.trim()

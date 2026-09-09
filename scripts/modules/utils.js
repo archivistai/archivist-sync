@@ -483,6 +483,50 @@ export class Utils {
       return s;
     }
   }
+
+  static firstPresent(...values) {
+    for (const value of values) {
+      if (value != null) return String(value);
+    }
+    return '';
+  }
+
+  /**
+   * Resolve the prose body for an Archivist record.
+   *
+   * Field naming differs per type: compendium entities use `description`,
+   * Sessions put their recap in `summary`, and Journals keep the body in
+   * `content` with `summary` holding only a short blurb — so a single
+   * `description || summary || content` chain imports a Journal's blurb as if
+   * it were the whole entry. An explicit empty string is kept; only
+   * absent/null fields fall through.
+   *
+   * @param {string} type Archivist record type ('Journal', 'Session', ...)
+   * @param {object} row
+   * @returns {string}
+   */
+  static archivistBodyText(type, row) {
+    if (!row) return '';
+    if (String(type) === 'Journal') {
+      return this.firstPresent(row.content, row.description, row.summary);
+    }
+    return this.firstPresent(row.description, row.summary, row.content);
+  }
+
+  /**
+   * Allow only http(s), mailto, and in-page fragments in fallback Markdown
+   * links. The surrounding text is already HTML-escaped.
+   * @param {string} href
+   * @returns {string} original escaped href, or empty if rejected
+   */
+  static _safeMarkdownHref(href) {
+    const raw = String(href ?? '').trim();
+    if (!raw) return '';
+    const decoded = raw.replace(/&amp;/g, '&');
+    if (/^(https?:|mailto:|#)/i.test(decoded)) return raw;
+    return '';
+  }
+
   /**
    * Log messages with module prefix
    * @param {string} message - The message to log
@@ -540,7 +584,17 @@ export class Utils {
     const withoutCode = withoutEscapes.replace(/`([^`]+?)`/g, (_m, inner) =>
       park('<code>' + inner + '</code>')
     );
-    const formatted = withoutCode
+    const withoutLinks = withoutCode.replace(
+      /\[([^\]]+)\]\(([^)\s]+)(?:\s+(?:"([^"]*)"|&quot;([^&]*?)&quot;))?\)/g,
+      (m, label, href, title, titleEsc) => {
+        const safe = this._safeMarkdownHref(href);
+        if (!safe) return m;
+        const ttl = title || titleEsc;
+        const titleAttr = ttl ? ' title="' + ttl + '"' : '';
+        return park('<a href="' + safe + '"' + titleAttr + '>' + label + '</a>');
+      }
+    );
+    const formatted = withoutLinks
       .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/~~(.+?)~~/g, '<s>$1</s>')
@@ -715,7 +769,10 @@ export class Utils {
     this._lastListIndex = i;
     const tag = ordered ? 'ol' : 'ul';
     const startNum = ordered ? parseInt(first[2], 10) : 1;
-    const startAttr = ordered && startNum > 1 ? ` start="${startNum}"` : '';
+    const startAttr =
+      ordered && Number.isFinite(startNum) && startNum !== 1
+        ? ` start="${startNum}"`
+        : '';
     return (
       '<' +
       tag +
