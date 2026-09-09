@@ -85,14 +85,14 @@
   top: 48px;
 }
 
-/* Recap sheet edit toggle positioning */
-.archivist-sheet-recap-simple .archivist-edit-toggle {
+/* Sidebar-less sheet edit toggle positioning */
+.archivist-sheet-full .archivist-edit-toggle {
   position: absolute;
   top: 8px;
   right: 8px;
 }
 
-.archivist-sheet-recap-simple prose-mirror[toggled]~.archivist-edit-toggle {
+.archivist-sheet-full prose-mirror[toggled]~.archivist-edit-toggle {
   top: 48px;
 }
 
@@ -1843,13 +1843,16 @@ img.archivist-icon {
   margin-right: 5px;
 }
 
-/* Simplified Recap Sheet (no sidebar) */
-.archivist-sheet-recap-simple {
+/* Sidebar-less sheets (Recap, Journal).
+   `.archivist-sheet` is a `180px 1fr` grid built for sheets with an <aside>.
+   A sheet whose only child is <main> would be placed in that 180px column, so
+   every sidebar-less template must also carry `.archivist-sheet-full`. */
+.archivist-sheet-full {
   display: block;
   height: 100%;
 }
 
-.archivist-sheet-recap-simple .archivist-content-full {
+.archivist-sheet-full .archivist-content-full {
   display: flex;
   flex-direction: column;
   height: 100%;

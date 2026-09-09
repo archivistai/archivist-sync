@@ -8,6 +8,27 @@ import { Utils } from '../modules/utils.js';
  * Phase 1: Diffs for linked sheets (text, image, links, deletions)
  * Phase 2: Unlinked Archivist docs with import options (and optional core Actor/Item/Scene creation)
  */
+/**
+ * Resolve the prose body for an Archivist record.
+ *
+ * Field naming differs per type: compendium entities use `description`,
+ * Sessions put their recap in `summary`, and Journals keep the body in
+ * `content` with `summary` holding only a short blurb — so a single
+ * `description || summary || content` chain imports a Journal's blurb as if it
+ * were the whole entry.
+ *
+ * @param {string} type Archivist record type ('Journal', 'Session', ...)
+ * @param {object} row
+ * @returns {string}
+ */
+function archivistBodyText(type, row) {
+  if (!row) return '';
+  if (String(type) === 'Journal') {
+    return String(row.content || row.description || row.summary || '');
+  }
+  return String(row.description || row.summary || row.content || '');
+}
+
 export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMixin(
   foundry.applications.api.ApplicationV2
 ) {
@@ -171,7 +192,10 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
     event.preventDefault();
     const scope = event?.target?.closest?.('[data-scope]')?.dataset?.scope;
     if (!scope) return;
-    if (scope === 'diffs') this.model.diffs.forEach((d) => (d.selected = true));
+    // Select All arms updates, never deletions. A deletion is irreversible in
+    // both systems, so it stays an explicit per-row choice.
+    if (scope === 'diffs')
+      this.model.diffs.forEach((d) => (d.selected = !d.deleted));
     if (scope === 'imports')
       this.model.imports.forEach((i) => (i.selected = true));
     this._captureScrollPosition();
@@ -236,7 +260,7 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
       ui.notifications?.warn?.('Archivist world not configured.');
       return;
     }
-    const selectedDiffs = this.model.diffs.filter((d) => d.selected);
+    let selectedDiffs = this.model.diffs.filter((d) => d.selected);
     const selectedImports = this.model.imports.filter((i) => i.selected);
 
     // Show nothing selected warning
@@ -272,22 +296,38 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
     console.debug('[SyncDialog] Real-time sync successfully suppressed');
 
     try {
-      // Confirm deletions before proceeding
-      const deleteDiffs = selectedDiffs.filter((d) => d.deleted);
+      // Confirm deletions before proceeding. Declining must not throw away the
+      // non-destructive half of the sync, so this is a three-way choice:
+      // delete, skip just the deletions, or abandon the run entirely.
+      let deleteDiffs = selectedDiffs.filter((d) => d.deleted);
       if (deleteDiffs.length > 0) {
         const names = deleteDiffs
           .map((d) => foundry.utils.escapeHTML(String(d.name ?? '')))
           .join(', ');
         const confirmed = await foundry.applications.api.DialogV2.confirm({
           window: { title: 'Confirm Deletion' },
-          content: `<p><strong>${deleteDiffs.length}</strong> journal${deleteDiffs.length > 1 ? 's' : ''} will be permanently deleted:</p><p>${names}</p><p>This cannot be undone. Continue?</p>`,
-          yes: { label: 'Delete', icon: 'fas fa-trash' },
-          no: { label: 'Cancel' },
+          content:
+            `<p><strong>${deleteDiffs.length}</strong> Foundry sheet${deleteDiffs.length > 1 ? 's' : ''} will be permanently deleted because ${deleteDiffs.length > 1 ? 'their' : 'its'} Archivist record no longer exists:</p>` +
+            `<p>${names}</p>` +
+            `<p>This cannot be undone. If ${deleteDiffs.length > 1 ? 'those records were' : 'that record was'} deleted by accident, skip the deletions and restore in Archivist first.</p>`,
+          yes: { label: 'Delete them', icon: 'fas fa-trash' },
+          no: { label: 'Skip deletions, apply the rest', icon: 'fas fa-forward' },
+          defaultYes: false,
+          rejectClose: false,
         });
-        if (!confirmed) {
+        if (confirmed === null || confirmed === undefined) {
+          // Dialog dismissed — abandon the whole run rather than guessing.
           this.isLoading = false;
           await this.render();
           return;
+        }
+        if (confirmed === false) {
+          const skipped = new Set(deleteDiffs.map((d) => d.journalId));
+          selectedDiffs = selectedDiffs.filter((d) => !skipped.has(d.journalId));
+          deleteDiffs = [];
+          for (const d of this.model.diffs) {
+            if (skipped.has(d.journalId)) d.selected = false;
+          }
         }
       }
 
@@ -688,9 +728,7 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
               (j?.pages?.contents || []).find((p) => p.type === 'text') || null;
             const stored = Utils.extractPageHtml(textPage) || '';
             const foundryPlain = Utils.toMarkdownIfHtml(stored);
-            const archMd = String(
-              (arch.description ?? arch.summary ?? arch.content) || ''
-            );
+            const archMd = archivistBodyText(type, arch);
             const archHtml = Utils.markdownToStoredHtml(archMd);
             const archivistPlain = Utils.toMarkdownIfHtml(archHtml);
 
@@ -841,7 +879,7 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
           type,
           id,
           name: row.character_name || row.name || row.title || 'Untitled',
-          description: row.description || row.summary || row.content || '',
+          description: archivistBodyText(type, row),
           image: row.image || '',
           selected: false,
           createCore: false,
@@ -1035,7 +1073,7 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
                     : null;
     if (!sheetType) return;
     // Convert markdown from Archivist to HTML for Foundry storage (sessions use summary)
-    const markdownContent = String(row.description || row.summary || row.content || '');
+    const markdownContent = archivistBodyText(row.type, row);
     const htmlContent = Utils.markdownToStoredHtml(markdownContent);
 
     // Determine folder ID based on sheet type using saved destinations
@@ -1341,7 +1379,7 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
               else if (itemId) targetDoc = game.items?.get?.(itemId) || null;
               else if (sceneId) targetDoc = game.scenes?.get?.(sceneId) || null;
 
-              const md = String(row.description || row.summary || row.content || '');
+              const md = archivistBodyText(row.type, row);
               const html = Utils.markdownToStoredHtml(md);
 
               if (targetDoc) {
