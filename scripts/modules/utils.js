@@ -564,6 +564,130 @@ export class Utils {
    * @returns {string} sanitized HTML
    */
   /**
+   * Scan a Markdown link/image destination starting right after its opening
+   * `(`, honoring balanced inner parentheses (e.g.
+   * `https://en.wikipedia.org/wiki/Foo_(bar)`) instead of stopping at the
+   * first `)`. Also recognizes an optional `"title"` / `&quot;title&quot;`
+   * segment, mirroring the destTitle grammar the old regex used.
+   * @param {string} str Full inline text being scanned.
+   * @param {number} start Index of the first destination character.
+   * @returns {{href: string, title?: string, titleEsc?: string, end: number}|null}
+   *   `end` is the index just past the closing `)`. Returns null when the
+   *   destination is malformed (unterminated, empty, or missing `)`).
+   */
+  static _scanMarkdownDestination(str, start) {
+    const len = str.length;
+    let i = start;
+    let depth = 0;
+    while (i < len) {
+      const ch = str[i];
+      if (ch === '(') {
+        depth += 1;
+        i += 1;
+        continue;
+      }
+      if (ch === ')') {
+        if (depth === 0) break;
+        depth -= 1;
+        i += 1;
+        continue;
+      }
+      if (/\s/.test(ch)) break;
+      i += 1;
+    }
+    if (i === start) return null; // destination must be non-empty
+    const href = str.slice(start, i);
+
+    // Optional `\s+("title"|&quot;title&quot;)` — only consumed as a unit;
+    // if it doesn't fully match, no whitespace is consumed and `)` must
+    // follow the destination directly.
+    let idx = i;
+    let title;
+    let titleEsc;
+    let j = i;
+    let sawSpace = false;
+    while (j < len && /\s/.test(str[j])) {
+      j += 1;
+      sawSpace = true;
+    }
+    if (sawSpace && str[j] === '"') {
+      const closeIdx = str.indexOf('"', j + 1);
+      if (closeIdx !== -1) {
+        title = str.slice(j + 1, closeIdx);
+        idx = closeIdx + 1;
+      }
+    } else if (sawSpace && str.startsWith('&quot;', j)) {
+      const closeIdx = str.indexOf('&quot;', j + 6);
+      if (closeIdx !== -1) {
+        titleEsc = str.slice(j + 6, closeIdx);
+        idx = closeIdx + 6;
+      }
+    }
+
+    if (str[idx] !== ')') return null;
+    return { href, title, titleEsc, end: idx + 1 };
+  }
+
+  /**
+   * Replace `![alt](dest "title")` or `[label](dest "title")` occurrences
+   * with a parked `<img>`/`<a>` tag, using {@link _scanMarkdownDestination}
+   * so a destination with balanced inner parentheses is captured in full
+   * rather than truncated at the first `)`.
+   * @param {string} str
+   * @param {boolean} isImage
+   * @param {(value: string) => string} park
+   * @returns {string}
+   */
+  static _replaceMarkdownLinks(str, isImage, park) {
+    const marker = isImage ? '![' : '[';
+    let out = '';
+    let i = 0;
+    while (i < str.length) {
+      const idx = str.indexOf(marker, i);
+      if (idx === -1) {
+        out += str.slice(i);
+        break;
+      }
+      out += str.slice(i, idx);
+      const labelStart = idx + marker.length;
+      const labelEnd = str.indexOf(']', labelStart);
+      const validLabel = isImage ? labelEnd !== -1 : labelEnd !== -1 && labelEnd > labelStart;
+      if (!validLabel || str[labelEnd + 1] !== '(') {
+        out += marker[0];
+        i = idx + 1;
+        continue;
+      }
+      const label = str.slice(labelStart, labelEnd);
+      const dest = this._scanMarkdownDestination(str, labelEnd + 2);
+      if (!dest) {
+        out += marker[0];
+        i = idx + 1;
+        continue;
+      }
+      const safe = this._safeMarkdownHref(dest.href);
+      if (!safe) {
+        // Syntactically valid but disallowed href — keep the whole span
+        // literal and resume scanning after it, matching how a failed
+        // regex-callback substitution left the original text in place.
+        out += str.slice(idx, dest.end);
+        i = dest.end;
+        continue;
+      }
+      const title = dest.title || dest.titleEsc;
+      const titleAttr = title ? ' title="' + title + '"' : '';
+      if (isImage) {
+        out += park(
+          '<img src="' + safe + '" alt="' + label + '"' + titleAttr + '>'
+        );
+      } else {
+        out += park('<a href="' + safe + '"' + titleAttr + '>' + label + '</a>');
+      }
+      i = dest.end;
+    }
+    return out;
+  }
+
+  /**
    * Render inline markdown (emphasis, code, backslash escapes) to HTML.
    * Escapes HTML first so generated tags are not re-escaped into literal text.
    * @param {string} text
@@ -584,33 +708,16 @@ export class Utils {
     const withoutCode = withoutEscapes.replace(/`([^`]+?)`/g, (_m, inner) =>
       park('<code>' + inner + '</code>')
     );
-    const destTitle = '(?:\\s+(?:"([^"]*)"|&quot;([^&]*?)&quot;))?';
-    const withoutImages = withoutCode.replace(
-      new RegExp('!\\[([^\\]]*)\\]\\(([^)\\s]+)' + destTitle + '\\)', 'g'),
-      (m, alt, href, title, titleEsc) => {
-        const safe = this._safeMarkdownHref(href);
-        if (!safe) return m;
-        const ttl = title || titleEsc;
-        const titleAttr = ttl ? ' title="' + ttl + '"' : '';
-        return park('<img src="' + safe + '" alt="' + alt + '"' + titleAttr + '>');
-      }
-    );
-    const withoutLinks = withoutImages.replace(
-      new RegExp('\\[([^\\]]+)\\]\\(([^)\\s]+)' + destTitle + '\\)', 'g'),
-      (m, label, href, title, titleEsc) => {
-        const safe = this._safeMarkdownHref(href);
-        if (!safe) return m;
-        const ttl = title || titleEsc;
-        const titleAttr = ttl ? ' title="' + ttl + '"' : '';
-        return park('<a href="' + safe + '"' + titleAttr + '>' + label + '</a>');
-      }
-    );
+    const withoutImages = this._replaceMarkdownLinks(withoutCode, true, park);
+    const withoutLinks = this._replaceMarkdownLinks(withoutImages, false, park);
     const withoutAutolinks = withoutLinks.replace(
-      /&lt;(https?:\/\/.+?)&gt;/gi,
-      (m, href) => {
+      /&lt;(?:(https?:\/\/.+?)|(mailto:[^\s&<>]+?)|([^\s&<>]+@[^\s&<>]+?))&gt;/gi,
+      (m, httpHref, mailtoHref, email) => {
+        const href = httpHref || mailtoHref || 'mailto:' + email;
         const safe = this._safeMarkdownHref(href);
         if (!safe) return m;
-        return park('<a href="' + safe + '">' + safe + '</a>');
+        const linkText = httpHref || mailtoHref ? safe : email;
+        return park('<a href="' + safe + '">' + linkText + '</a>');
       }
     );
     const formatted = withoutAutolinks
@@ -842,17 +949,20 @@ export class Utils {
       .replace(/<https?:\/\/[^>\s]+>/gi, ' ')
       .replace(/<mailto:[^>\s]+>/gi, ' ')
       .replace(/<[^\s<>]+@[^\s<>]+>/g, ' ');
+    const startsWithHtmlTag =
+      /^\s*<\/?(?:p|div|span|br|hr|h[1-6]|ul|ol|li|pre|code|blockquote|strong|em|a|img|table|thead|tbody|tr|td|th|section|article|header|footer|main|aside|figure|figcaption)\b/i.test(
+        withoutAutolinks
+      );
+    // A document that clearly opens with an HTML tag is stored HTML, even if
+    // a later line — inside a `<pre>`/`<code>` block, say — happens to look
+    // like Markdown block syntax (a shell comment such as `# comment`).
+    // Check this first so a code sample can't fool the Markdown-block scan
+    // below into a false negative.
+    if (startsWithHtmlTag) return true;
     // Markdown with an incidental inline tag (`# Title` plus a <span>) must
-    // still go through the renderer. Only a document that *starts* as HTML
-    // and has no Markdown block syntax is treated as stored HTML.
-    if (
-      /^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>\s|`{3,}|~{3,})/m.test(withoutAutolinks)
-    ) {
-      return false;
-    }
-    return /^\s*<\/?(?:p|div|span|br|hr|h[1-6]|ul|ol|li|pre|code|blockquote|strong|em|a|img|table|thead|tbody|tr|td|th|section|article|header|footer|main|aside|figure|figcaption)\b/i.test(
-      withoutAutolinks
-    );
+    // still go through the renderer. A document that doesn't open with an
+    // HTML tag is never treated as stored HTML, so it falls through here.
+    return false;
   }
 
   static markdownToStoredHtml(markdown) {
