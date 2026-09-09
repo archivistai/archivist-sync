@@ -527,20 +527,25 @@ export class Utils {
    */
   static _renderMarkdownInline(text) {
     const escaped = foundry.utils.escapeHTML(String(text ?? ''));
-    // Park backslash-escaped characters so they are not read as emphasis, then
-    // restore them bare once the emphasis passes have run.
+    // Park backslash-escapes and code spans so later emphasis passes cannot
+    // see their punctuation (code like **literal** in backticks stays literal).
+    // Tokens are NUL-delimited so ordinary digits in the journal are not eaten
+    // by the restore pass.
     const parked = [];
+    const park = (value) => '\u0000' + (parked.push(value) - 1) + '\u0000';
     const withoutEscapes = escaped.replace(
       /\\([\\`*_[\]#>+.\-!()])/g,
-      (_m, ch) => ' ' + (parked.push(ch) - 1) + ' '
+      (_m, ch) => park(ch)
     );
-    const formatted = withoutEscapes
-      .replace(/`([^`]+?)`/g, '<code>$1</code>')
+    const withoutCode = withoutEscapes.replace(/`([^`]+?)`/g, (_m, inner) =>
+      park('<code>' + inner + '</code>')
+    );
+    const formatted = withoutCode
       .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/~~(.+?)~~/g, '<s>$1</s>')
       .replace(/(?<!\w)[*_](?=\S)(.+?)(?<=\S)[*_](?!\w)/g, '<em>$1</em>');
-    return formatted.replace(/ (\d+) /g, (_m, i) => parked[Number(i)]);
+    return formatted.replace(/\u0000(\d+)\u0000/g, (_m, i) => parked[Number(i)] ?? '');
   }
 
   /**
@@ -559,8 +564,13 @@ export class Utils {
     let i = 0;
 
     const isBlank = (l) => !String(l).trim();
+    // CommonMark-ish fence: 3+ backticks or tildes, optional info string
+    // (`c++`, `objective-c`, ` ``` rust,ignore `). Must match isBlockStart or
+    // the paragraph loop consumes nothing and the outer loop never advances.
+    const fenceOpen = (l) => String(l).match(/^\s*([`~]{3,})(.*)$/);
     const isBlockStart = (l) =>
-      /^\s*(?:#{1,6}\s|>|```)/.test(l) ||
+      /^\s*(?:#{1,6}\s|>)/.test(l) ||
+      !!fenceOpen(l) ||
       /^\s*(?:[-*+]|\d+[.)])\s+/.test(l) ||
       /^\s*(?:[-*_]\s*){3,}$/.test(l);
 
@@ -573,16 +583,24 @@ export class Utils {
       }
 
       // Fenced code — verbatim, no inline processing.
-      const fence = line.match(/^\s*```(\w*)\s*$/);
+      const fence = fenceOpen(line);
       if (fence) {
+        const marker = fence[1][0];
+        const fenceLen = fence[1].length;
+        const info = String(fence[2] || '').trim().split(/\s+/)[0] || '';
+        const isClose = (l) => {
+          const m = String(l).match(/^\s*([`~]+)\s*$/);
+          return !!(m && m[1][0] === marker && m[1].length >= fenceLen);
+        };
         const body = [];
         i += 1;
-        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+        while (i < lines.length && !isClose(lines[i])) {
           body.push(lines[i]);
           i += 1;
         }
-        i += 1; // closing fence
-        const cls = fence[1] ? ' class="language-' + fence[1] + '"' : '';
+        if (i < lines.length) i += 1; // closing fence
+        const lang = info.replace(/[^\w+#.-]/g, '');
+        const cls = lang ? ' class="language-' + lang + '"' : '';
         out.push(
           '<pre><code' +
             cls +
@@ -636,11 +654,15 @@ export class Utils {
       }
 
       // Paragraph: accumulate until a blank line or the start of another block.
+      // If a block-start form is not handled above, still advance so a future
+      // syntax cannot freeze import/sync the way unmatched ```c++ did.
       const body = [];
+      const paraStart = i;
       while (i < lines.length && !isBlank(lines[i]) && !isBlockStart(lines[i])) {
         body.push(lines[i]);
         i += 1;
       }
+      if (i === paraStart) i += 1;
       out.push(
         '<p>' +
           this._renderMarkdownInline(body.join('\n')).replace(/\n/g, '<br>') +
@@ -692,8 +714,17 @@ export class Utils {
 
     this._lastListIndex = i;
     const tag = ordered ? 'ol' : 'ul';
+    const startNum = ordered ? parseInt(first[2], 10) : 1;
+    const startAttr = ordered && startNum > 1 ? ` start="${startNum}"` : '';
     return (
-      '<' + tag + '>' + items.map((it) => '<li>' + it + '</li>').join('') + '</' + tag + '>'
+      '<' +
+      tag +
+      startAttr +
+      '>' +
+      items.map((it) => '<li>' + it + '</li>').join('') +
+      '</' +
+      tag +
+      '>'
     );
   }
 
