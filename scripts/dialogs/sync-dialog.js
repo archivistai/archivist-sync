@@ -21,12 +21,23 @@ import { Utils } from '../modules/utils.js';
  * @param {object} row
  * @returns {string}
  */
+function firstPresent(...values) {
+  for (const value of values) {
+    if (value != null) return String(value);
+  }
+  return '';
+}
+
 function archivistBodyText(type, row) {
   if (!row) return '';
+  // Prefer an explicit empty string over a fallback. A Journal with
+  // `content: ""` and a nonempty `summary` blurb must stay empty — `||`
+  // would re-import the blurb as the whole body, which this helper exists
+  // to prevent.
   if (String(type) === 'Journal') {
-    return String(row.content || row.description || row.summary || '');
+    return firstPresent(row.content, row.description, row.summary);
   }
-  return String(row.description || row.summary || row.content || '');
+  return firstPresent(row.description, row.summary, row.content);
 }
 
 export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMixin(

@@ -1418,8 +1418,67 @@ function installRealtimeSyncListeners() {
     }
   });
 
-  // Delete custom sheets when the JournalEntry itself is deleted
-  Hooks.on('preDeleteJournalEntry', async (entry) => {
+  // Delete custom sheets when the JournalEntry itself is deleted.
+  // Defer the Archivist-side decision until every preDelete in this turn has
+  // registered. A bulk delete of duplicate sheets otherwise sees each sibling
+  // still in game.journal and skips the remote delete for all of them.
+  const pendingSheetDeletes = new Map();
+
+  const flushArchivistSheetDelete = async (archivistId, bucket) => {
+    const survivors = (game.journal?.contents || []).filter((j) => {
+      if (bucket.ids.has(String(j.id))) return false;
+      const f = j.getFlag(CONFIG.MODULE_ID, 'archivist') || {};
+      return String(f.archivistId || '') === String(archivistId);
+    });
+    if (survivors.length) {
+      console.log(
+        '[RTS] Skipping Archivist delete: other sheets still reference this record',
+        { archivistId, remaining: survivors.length }
+      );
+      ui.notifications?.info?.(
+        `Removed the duplicate sheet. "${bucket.name}" is still in Archivist — ${survivors.length} other sheet${survivors.length > 1 ? 's' : ''} still reference${survivors.length > 1 ? '' : 's'} it.`
+      );
+      return;
+    }
+
+    const confirmed = await foundry.applications.api.DialogV2.confirm({
+      window: { title: 'Delete from Archivist?' },
+      content:
+        `<p>This is the only Foundry sheet for <strong>${foundry.utils.escapeHTML(bucket.name || 'this record')}</strong>.</p>` +
+        `<p>Deleting it here also <strong>permanently deletes it from Archivist</strong> for everyone in the campaign. This cannot be undone.</p>` +
+        `<p>Delete from Archivist too, or keep the Archivist record and only remove the Foundry sheet?</p>`,
+      yes: { label: 'Delete from Archivist', icon: 'fa-solid fa-trash' },
+      no: { label: 'Keep in Archivist', icon: 'fa-solid fa-cloud' },
+      defaultYes: false,
+      rejectClose: false,
+    });
+    if (!confirmed) {
+      console.log('[RTS] GM kept the Archivist record; only the Foundry sheet is removed', {
+        archivistId,
+      });
+      return;
+    }
+
+    const st = bucket.sheetType;
+    if (
+      (st === 'pc' || st === 'npc' || st === 'character') &&
+      archivistApi.deleteCharacter
+    ) {
+      await archivistApi.deleteCharacter(apiKey, archivistId);
+    } else if (st === 'item' && archivistApi.deleteItem) {
+      await archivistApi.deleteItem(apiKey, archivistId);
+    } else if (st === 'location' && archivistApi.deleteLocation) {
+      await archivistApi.deleteLocation(apiKey, archivistId);
+    } else if (st === 'faction' && archivistApi.deleteFaction) {
+      await archivistApi.deleteFaction(apiKey, archivistId);
+    } else if (st === 'quest') {
+      await archivistApi.deleteQuest(apiKey, archivistId);
+    } else if (st === 'journal') {
+      await archivistApi.deleteJournal(apiKey, archivistId);
+    }
+  };
+
+  Hooks.on('preDeleteJournalEntry', (entry) => {
     try {
       if (
         !settingsManager.isRealtimeSyncEnabled?.() ||
@@ -1432,61 +1491,23 @@ function installRealtimeSyncListeners() {
       if (!id) return;
       if (st === 'recap') return; // Never create/delete recaps
 
-      // Two sheets can point at one Archivist record (a duplicate import, a
-      // copy/paste in the directory). Deleting one of them must not delete the
-      // record the survivors still represent.
-      const siblings = (game.journal?.contents || []).filter((j) => {
-        if (j.id === entry.id) return false;
-        const f = j.getFlag(CONFIG.MODULE_ID, 'archivist') || {};
-        return String(f.archivistId || '') === String(id);
-      });
-      if (siblings.length) {
-        console.log(
-          '[RTS] Skipping Archivist delete: other sheets still reference this record',
-          { archivistId: id, remaining: siblings.length }
-        );
-        ui.notifications?.info?.(
-          `Removed the duplicate sheet. "${entry.name}" is still in Archivist — ${siblings.length} other sheet${siblings.length > 1 ? 's' : ''} still reference${siblings.length > 1 ? '' : 's'} it.`
-        );
-        return;
-      }
-
-      // Deleting the last sheet for a record deletes it in Archivist, for every
-      // other member of the campaign, and Archivist has no undo. Ask first.
-      const confirmed = await foundry.applications.api.DialogV2.confirm({
-        window: { title: 'Delete from Archivist?' },
-        content:
-          `<p>This is the only Foundry sheet for <strong>${foundry.utils.escapeHTML(entry.name || 'this record')}</strong>.</p>` +
-          `<p>Deleting it here also <strong>permanently deletes it from Archivist</strong> for everyone in the campaign. This cannot be undone.</p>` +
-          `<p>Delete from Archivist too, or keep the Archivist record and only remove the Foundry sheet?</p>`,
-        yes: { label: 'Delete from Archivist', icon: 'fa-solid fa-trash' },
-        no: { label: 'Keep in Archivist', icon: 'fa-solid fa-cloud' },
-        defaultYes: false,
-        rejectClose: false,
-      });
-      if (!confirmed) {
-        console.log('[RTS] GM kept the Archivist record; only the Foundry sheet is removed', {
-          archivistId: id,
+      let bucket = pendingSheetDeletes.get(id);
+      if (!bucket) {
+        bucket = {
+          ids: new Set(),
+          sheetType: st,
+          name: entry.name || 'this record',
+        };
+        pendingSheetDeletes.set(id, bucket);
+        queueMicrotask(() => {
+          pendingSheetDeletes.delete(id);
+          void flushArchivistSheetDelete(id, bucket).catch((e) =>
+            console.warn('[RTS] preDeleteJournalEntry failed', e)
+          );
         });
-        return;
       }
-
-      if (
-        (st === 'pc' || st === 'npc' || st === 'character') &&
-        archivistApi.deleteCharacter
-      ) {
-        await archivistApi.deleteCharacter(apiKey, id);
-      } else if (st === 'item' && archivistApi.deleteItem) {
-        await archivistApi.deleteItem(apiKey, id);
-      } else if (st === 'location' && archivistApi.deleteLocation) {
-        await archivistApi.deleteLocation(apiKey, id);
-      } else if (st === 'faction' && archivistApi.deleteFaction) {
-        await archivistApi.deleteFaction(apiKey, id);
-      } else if (st === 'quest') {
-        await archivistApi.deleteQuest(apiKey, id);
-      } else if (st === 'journal') {
-        await archivistApi.deleteJournal(apiKey, id);
-      }
+      bucket.ids.add(String(entry.id));
+      if (entry.name) bucket.name = entry.name;
     } catch (e) {
       console.warn('[RTS] preDeleteJournalEntry failed', e);
     }
