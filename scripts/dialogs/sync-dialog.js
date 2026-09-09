@@ -469,12 +469,22 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
    * @returns {string}
    */
   _normalizeHtmlForComparison(html) {
-    return String(html ?? '')
+    const src = String(html ?? '')
       .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n')
+      .replace(/\r/g, '\n');
+    const parked = [];
+    const withoutCode = src.replace(
+      /<(pre|code)\b[^>]*>[\s\S]*?<\/\1>/gi,
+      (m) => `\u0000${parked.push(m) - 1}\u0000`
+    );
+    const normalized = withoutCode
       .replace(/[^\S\n]+/g, ' ')
       .replace(/>\s+</g, '><')
       .trim();
+    return normalized.replace(
+      /\u0000(\d+)\u0000/g,
+      (_m, i) => parked[Number(i)] ?? ''
+    );
   }
 
   /** Compare local questData flags against Archivist quest fields. */

@@ -584,8 +584,19 @@ export class Utils {
     const withoutCode = withoutEscapes.replace(/`([^`]+?)`/g, (_m, inner) =>
       park('<code>' + inner + '</code>')
     );
-    const withoutLinks = withoutCode.replace(
-      /\[([^\]]+)\]\(([^)\s]+)(?:\s+(?:"([^"]*)"|&quot;([^&]*?)&quot;))?\)/g,
+    const destTitle = '(?:\\s+(?:"([^"]*)"|&quot;([^&]*?)&quot;))?';
+    const withoutImages = withoutCode.replace(
+      new RegExp('!\\[([^\\]]*)\\]\\(([^)\\s]+)' + destTitle + '\\)', 'g'),
+      (m, alt, href, title, titleEsc) => {
+        const safe = this._safeMarkdownHref(href);
+        if (!safe) return m;
+        const ttl = title || titleEsc;
+        const titleAttr = ttl ? ' title="' + ttl + '"' : '';
+        return park('<img src="' + safe + '" alt="' + alt + '"' + titleAttr + '>');
+      }
+    );
+    const withoutLinks = withoutImages.replace(
+      new RegExp('\\[([^\\]]+)\\]\\(([^)\\s]+)' + destTitle + '\\)', 'g'),
       (m, label, href, title, titleEsc) => {
         const safe = this._safeMarkdownHref(href);
         if (!safe) return m;
@@ -594,7 +605,15 @@ export class Utils {
         return park('<a href="' + safe + '"' + titleAttr + '>' + label + '</a>');
       }
     );
-    const formatted = withoutLinks
+    const withoutAutolinks = withoutLinks.replace(
+      /&lt;(https?:\/\/[^&\s<]+)&gt;/gi,
+      (m, href) => {
+        const safe = this._safeMarkdownHref(href);
+        if (!safe) return m;
+        return park('<a href="' + safe + '">' + safe + '</a>');
+      }
+    );
+    const formatted = withoutAutolinks
       .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/~~(.+?)~~/g, '<s>$1</s>')
@@ -785,17 +804,36 @@ export class Utils {
     );
   }
 
+  /**
+   * True for stored Foundry HTML, not for Markdown that happens to contain
+   * angle brackets. `<https://example.com>` is a CommonMark autolink and
+   * must go through the Markdown path; the old `startsWith('<')` heuristic
+   * treated it as HTML, skipped rendering, and let cleanHTML drop it.
+   * @param {string} text
+   * @returns {boolean}
+   */
+  static looksLikeStoredHtml(text) {
+    const raw = String(text ?? '').trim();
+    if (!raw) return false;
+    const decoded = raw
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&amp;/gi, '&')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'");
+    const withoutAutolinks = decoded
+      .replace(/<https?:\/\/[^>\s]+>/gi, ' ')
+      .replace(/<mailto:[^>\s]+>/gi, ' ')
+      .replace(/<[^\s<>]+@[^\s<>]+>/g, ' ');
+    return /<\/?(?:p|div|span|br|hr|h[1-6]|ul|ol|li|pre|code|blockquote|strong|em|a|img|table|thead|tbody|tr|td|th|section|article|header|footer|main|aside|figure|figcaption)\b/i.test(
+      withoutAutolinks
+    );
+  }
+
   static markdownToStoredHtml(markdown) {
     const md = String(markdown ?? '');
     try {
-      const trimmed = md.trim();
-      const isProbablyHtml =
-        !!trimmed &&
-        ((trimmed.startsWith('<') && trimmed.includes('>')) ||
-          /<\/?[a-z][\s\S]*>/i.test(trimmed) ||
-          /&(?:lt|gt|amp|quot|#39);/i.test(trimmed));
-
-      if (isProbablyHtml) {
+      if (this.looksLikeStoredHtml(md)) {
         return foundry?.utils?.TextEditor?.cleanHTML
           ? foundry.utils.TextEditor.cleanHTML(md)
           : md;
@@ -1030,22 +1068,7 @@ export class Utils {
     // v10+ API: JournalEntryPage documents under journal.pages
     const pagesCollection = journal.pages;
     const safeContent = String(content ?? '');
-    // Heuristic: detect if provided content is HTML (vs. Markdown/plain)
-    const isProbablyHtml = (() => {
-      const t = safeContent.trim();
-      if (!t) return false;
-      // Common HTML markers or tags
-      if (t.startsWith('<') && t.includes('>')) return true;
-      if (
-        t.includes('</') ||
-        t.includes('<br') ||
-        t.includes('<p') ||
-        t.includes('<h1') ||
-        t.includes('&lt;')
-      )
-        return true;
-      return false;
-    })();
+    const isProbablyHtml = this.looksLikeStoredHtml(safeContent);
 
     console.log(`[Utils] ensureJournalTextPage:`, {
       journalId: journal?.id,
@@ -1530,6 +1553,30 @@ export class Utils {
     return null;
   }
 
+  /**
+   * True if this journal or any of its pages represents the Archivist record.
+   * Legacy location/faction imports lived as JournalEntryPages; a standalone
+   * sheet delete must not treat those pages as absent.
+   * @param {JournalEntry} journal
+   * @param {string} archivistId
+   * @returns {boolean}
+   */
+  static journalReferencesArchivistId(journal, archivistId) {
+    const wanted = String(archivistId || '');
+    if (!wanted || !journal) return false;
+    try {
+      const flags = journal.getFlag?.(CONFIG.MODULE_ID, 'archivist') || {};
+      if (String(flags.archivistId || '') === wanted) return true;
+      for (const page of journal.pages?.contents || []) {
+        if (String(this.getPageArchivistMeta(page).id || '') === wanted)
+          return true;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    return false;
+  }
+
   static async createCustomJournalForImport({
     name,
     html = '',
@@ -1580,10 +1627,23 @@ export class Utils {
         });
         const updates = {};
         if (name && existing.name !== name) updates.name = name;
-        if (imageUrl && existing.img !== imageUrl) updates.img = imageUrl;
+        // `imageUrl === undefined` means the caller omitted it. null/'' means
+        // Archivist has no image and a reused sheet must drop the stale one.
+        if (imageUrl !== undefined) {
+          const nextImg = imageUrl || null;
+          if (nextImg && existing.img !== nextImg) updates.img = nextImg;
+          if (!nextImg && existing.img) updates.img = null;
+        }
         if (typeof sort === 'number' && existing.sort !== sort) updates.sort = sort;
         if (targetFolderId && (existing.folder?.id || null) !== targetFolderId) {
           updates.folder = targetFolderId;
+        }
+        if (sheetClass) {
+          const core = existing.flags?.core || {};
+          if (core.sheetClass !== sheetClass || core.sheet !== sheetClass) {
+            updates['flags.core.sheetClass'] = sheetClass;
+            updates['flags.core.sheet'] = sheetClass;
+          }
         }
         if (Object.keys(updates).length) {
           await existing.update(updates, { render: false });
@@ -1595,7 +1655,8 @@ export class Utils {
           sheetType: normalizedType,
           archivistId,
           archivistWorldId: worldId || priorFlags.archivistWorldId || null,
-          image: imageUrl || priorFlags.image || null,
+          image:
+            imageUrl !== undefined ? imageUrl || null : priorFlags.image || null,
         });
         return existing;
       }
