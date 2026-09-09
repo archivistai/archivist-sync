@@ -1364,13 +1364,21 @@ function installRealtimeSyncListeners() {
       if (bucket.ids.has(String(j.id))) return false;
       return Utils.journalReferencesArchivistId(j, archivistId);
     });
-    if (survivors.length) {
+    // World Setup can give a linked Actor, Item, or Scene the same
+    // archivistId as this journal sheet. That core document isn't in
+    // game.journal, so it wouldn't show up as a survivor above — check it
+    // separately before treating this as the last Foundry sheet.
+    const hasLinkedCoreDocument =
+      Utils.coreDocumentReferencesArchivistId(archivistId);
+    if (survivors.length || hasLinkedCoreDocument) {
       console.log(
         '[RTS] Skipping Archivist delete: other sheets still reference this record',
-        { archivistId, remaining: survivors.length }
+        { archivistId, remaining: survivors.length, hasLinkedCoreDocument }
       );
       ui.notifications?.info?.(
-        `Removed the duplicate sheet. "${bucket.name}" is still in Archivist — ${survivors.length} other sheet${survivors.length > 1 ? 's' : ''} still reference${survivors.length > 1 ? '' : 's'} it.`
+        survivors.length
+          ? `Removed the duplicate sheet. "${bucket.name}" is still in Archivist — ${survivors.length} other sheet${survivors.length > 1 ? 's' : ''} still reference${survivors.length > 1 ? '' : 's'} it.`
+          : `Removed the duplicate sheet. "${bucket.name}" is still in Archivist — a linked Actor, Item, or Scene still references it.`
       );
       return;
     }

@@ -842,17 +842,20 @@ export class Utils {
       .replace(/<https?:\/\/[^>\s]+>/gi, ' ')
       .replace(/<mailto:[^>\s]+>/gi, ' ')
       .replace(/<[^\s<>]+@[^\s<>]+>/g, ' ');
+    const startsWithHtmlTag =
+      /^\s*<\/?(?:p|div|span|br|hr|h[1-6]|ul|ol|li|pre|code|blockquote|strong|em|a|img|table|thead|tbody|tr|td|th|section|article|header|footer|main|aside|figure|figcaption)\b/i.test(
+        withoutAutolinks
+      );
+    // A document that clearly opens with an HTML tag is stored HTML, even if
+    // a later line — inside a `<pre>`/`<code>` block, say — happens to look
+    // like Markdown block syntax (a shell comment such as `# comment`).
+    // Check this first so a code sample can't fool the Markdown-block scan
+    // below into a false negative.
+    if (startsWithHtmlTag) return true;
     // Markdown with an incidental inline tag (`# Title` plus a <span>) must
-    // still go through the renderer. Only a document that *starts* as HTML
-    // and has no Markdown block syntax is treated as stored HTML.
-    if (
-      /^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>\s|`{3,}|~{3,})/m.test(withoutAutolinks)
-    ) {
-      return false;
-    }
-    return /^\s*<\/?(?:p|div|span|br|hr|h[1-6]|ul|ol|li|pre|code|blockquote|strong|em|a|img|table|thead|tbody|tr|td|th|section|article|header|footer|main|aside|figure|figcaption)\b/i.test(
-      withoutAutolinks
-    );
+    // still go through the renderer. A document that doesn't open with an
+    // HTML tag is never treated as stored HTML, so it falls through here.
+    return false;
   }
 
   static markdownToStoredHtml(markdown) {
@@ -1507,6 +1510,33 @@ export class Utils {
       for (const page of journal.pages?.contents || []) {
         if (String(this.getPageArchivistMeta(page).id || '') === wanted)
           return true;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    return false;
+  }
+
+  /**
+   * True if any Actor, Item, or Scene carries this Archivist record's id.
+   * World Setup gives a core document the same `archivistId` flag as its
+   * companion journal when it creates or maps that Actor/Item/Scene. A
+   * survivor check that only scans game.journal misses those linked core
+   * documents and can offer to permanently delete an Archivist record that
+   * a core document — and realtime updates — still depend on.
+   * @param {string} archivistId
+   * @returns {boolean}
+   */
+  static coreDocumentReferencesArchivistId(archivistId) {
+    const wanted = String(archivistId || '');
+    if (!wanted) return false;
+    try {
+      const collections = [game.actors, game.items, game.scenes];
+      for (const collection of collections) {
+        for (const doc of collection?.contents || []) {
+          const id = doc?.getFlag?.(CONFIG.MODULE_ID, 'archivistId');
+          if (String(id || '') === wanted) return true;
+        }
       }
     } catch (_) {
       /* ignore */
