@@ -1431,7 +1431,7 @@ function installRealtimeSyncListeners() {
       const id = flags?.archivistId;
       const st = String(flags?.sheetType || '').toLowerCase();
       if (!id) return;
-      if (st === 'recap') return; // Never create/delete recaps
+      if (st === 'recap' || st === 'session') return; // Never create/delete recaps
 
       let bucket = pendingSheetDeletes.get(id);
       if (!bucket) {

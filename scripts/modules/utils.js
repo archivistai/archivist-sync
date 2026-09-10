@@ -564,6 +564,120 @@ export class Utils {
    * @returns {string} sanitized HTML
    */
   /**
+   * Scan a Markdown link/image destination starting right after its opening
+   * `(`, honoring balanced inner parentheses.
+   */
+  static _scanMarkdownDestination(str, start) {
+    const len = str.length;
+    let i = start;
+    let depth = 0;
+    while (i < len) {
+      const ch = str[i];
+      if (ch === '(') {
+        depth += 1;
+        i += 1;
+        continue;
+      }
+      if (ch === ')') {
+        if (depth === 0) break;
+        depth -= 1;
+        i += 1;
+        continue;
+      }
+      if (/\s/.test(ch)) break;
+      i += 1;
+    }
+    if (i === start) return null;
+    const href = str.slice(start, i);
+
+    let idx = i;
+    let title;
+    let titleEsc;
+    let j = i;
+    let sawSpace = false;
+    while (j < len && /\s/.test(str[j])) {
+      j += 1;
+      sawSpace = true;
+    }
+    if (sawSpace && str[j] === '"') {
+      const closeIdx = str.indexOf('"', j + 1);
+      if (closeIdx !== -1) {
+        title = str.slice(j + 1, closeIdx);
+        idx = closeIdx + 1;
+      }
+    } else if (sawSpace && str.startsWith('&quot;', j)) {
+      const closeIdx = str.indexOf('&quot;', j + 6);
+      if (closeIdx !== -1) {
+        titleEsc = str.slice(j + 6, closeIdx);
+        idx = closeIdx + 6;
+      }
+    }
+    if (str[idx] !== ')') return null;
+    return { href, title, titleEsc, end: idx + 1 };
+  }
+
+  /** Replace Markdown links or images with parked HTML. */
+  static _replaceMarkdownLinks(str, isImage, park) {
+    const marker = isImage ? '![' : '[';
+    let out = '';
+    let i = 0;
+    while (i < str.length) {
+      const idx = str.indexOf(marker, i);
+      if (idx === -1) {
+        out += str.slice(i);
+        break;
+      }
+      out += str.slice(i, idx);
+      const labelStart = idx + marker.length;
+      const labelEnd = str.indexOf(']', labelStart);
+      const validLabel = isImage
+        ? labelEnd !== -1
+        : labelEnd !== -1 && labelEnd > labelStart;
+      if (!validLabel || str[labelEnd + 1] !== '(') {
+        out += marker[0];
+        i = idx + 1;
+        continue;
+      }
+      const label = str.slice(labelStart, labelEnd);
+      const dest = this._scanMarkdownDestination(str, labelEnd + 2);
+      if (!dest) {
+        out += marker[0];
+        i = idx + 1;
+        continue;
+      }
+      const safe = this._safeMarkdownHref(dest.href);
+      if (!safe) {
+        out += str.slice(idx, dest.end);
+        i = dest.end;
+        continue;
+      }
+      const title = dest.title || dest.titleEsc;
+      const titleAttr = title ? ' title="' + title + '"' : '';
+      if (isImage) {
+        out += park(
+          '<img src="' + safe + '" alt="' + label + '"' + titleAttr + '>'
+        );
+      } else {
+        const renderedLabel = this._formatMarkdownInline(label);
+        out += park(
+          '<a href="' + safe + '"' + titleAttr + '>' + renderedLabel + '</a>'
+        );
+      }
+      i = dest.end;
+    }
+    return out;
+  }
+
+  /** Apply the non-structural emphasis passes used by the inline fallback. */
+  static _formatMarkdownInline(text) {
+    return String(text ?? '')
+      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/~~(.+?)~~/g, '<s>$1</s>')
+      .replace(/(?<!\w)[*_](?=\S)(.+?)(?<=\S)[*_](?!\w)/g, '<em>$1</em>');
+  }
+
+  /**
    * Render inline markdown (emphasis, code, backslash escapes) to HTML.
    * Escapes HTML first so generated tags are not re-escaped into literal text.
    * @param {string} text
@@ -571,12 +685,8 @@ export class Utils {
    */
   static _renderMarkdownInline(text) {
     const escaped = foundry.utils.escapeHTML(String(text ?? ''));
-    // Park backslash-escapes and code spans so later emphasis passes cannot
-    // see their punctuation (code like **literal** in backticks stays literal).
-    // Tokens are NUL-delimited so ordinary digits in the journal are not eaten
-    // by the restore pass.
     const parked = [];
-    const park = (value) => '\u0000' + (parked.push(value) - 1) + '\u0000';
+    const park = (value) => '\uE000' + (parked.push(value) - 1) + '\uE001';
     const withoutEscapes = escaped.replace(
       /\\([\\`*_[\]#>+.\-!()])/g,
       (_m, ch) => park(ch)
@@ -584,41 +694,27 @@ export class Utils {
     const withoutCode = withoutEscapes.replace(/`([^`]+?)`/g, (_m, inner) =>
       park('<code>' + inner + '</code>')
     );
-    const destTitle = '(?:\\s+(?:"([^"]*)"|&quot;([^&]*?)&quot;))?';
-    const withoutImages = withoutCode.replace(
-      new RegExp('!\\[([^\\]]*)\\]\\(([^)\\s]+)' + destTitle + '\\)', 'g'),
-      (m, alt, href, title, titleEsc) => {
-        const safe = this._safeMarkdownHref(href);
-        if (!safe) return m;
-        const ttl = title || titleEsc;
-        const titleAttr = ttl ? ' title="' + ttl + '"' : '';
-        return park('<img src="' + safe + '" alt="' + alt + '"' + titleAttr + '>');
-      }
-    );
-    const withoutLinks = withoutImages.replace(
-      new RegExp('\\[([^\\]]+)\\]\\(([^)\\s]+)' + destTitle + '\\)', 'g'),
-      (m, label, href, title, titleEsc) => {
-        const safe = this._safeMarkdownHref(href);
-        if (!safe) return m;
-        const ttl = title || titleEsc;
-        const titleAttr = ttl ? ' title="' + ttl + '"' : '';
-        return park('<a href="' + safe + '"' + titleAttr + '>' + label + '</a>');
-      }
-    );
+    const withoutImages = this._replaceMarkdownLinks(withoutCode, true, park);
+    const withoutLinks = this._replaceMarkdownLinks(withoutImages, false, park);
     const withoutAutolinks = withoutLinks.replace(
-      /&lt;(https?:\/\/.+?)&gt;/gi,
-      (m, href) => {
+      /&lt;(?:(https?:\/\/.+?)|(mailto:[^\s&<>]+?)|([^\s&<>]+@[^\s&<>]+?))&gt;/gi,
+      (m, httpHref, mailtoHref, email) => {
+        const href = httpHref || mailtoHref || 'mailto:' + email;
         const safe = this._safeMarkdownHref(href);
         if (!safe) return m;
-        return park('<a href="' + safe + '">' + safe + '</a>');
+        const linkText = httpHref || mailtoHref ? safe : email;
+        return park('<a href="' + safe + '">' + linkText + '</a>');
       }
     );
-    const formatted = withoutAutolinks
-      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/~~(.+?)~~/g, '<s>$1</s>')
-      .replace(/(?<!\w)[*_](?=\S)(.+?)(?<=\S)[*_](?!\w)/g, '<em>$1</em>');
-    return formatted.replace(/\u0000(\d+)\u0000/g, (_m, i) => parked[Number(i)] ?? '');
+    const formatted = this._formatMarkdownInline(withoutAutolinks);
+    const token = /\uE000(\d+)\uE001/g;
+    let restored = formatted;
+    for (let pass = 0; pass <= parked.length; pass += 1) {
+      const next = restored.replace(token, (_m, i) => parked[Number(i)] ?? '');
+      if (next === restored) break;
+      restored = next;
+    }
+    return restored;
   }
 
   /**
@@ -1493,6 +1589,24 @@ export class Utils {
     return null;
   }
 
+  /** Find a legacy JournalEntryPage representation of an Archivist record. */
+  static findJournalPageByArchivistId(archivistId) {
+    const wanted = String(archivistId || '');
+    if (!wanted) return null;
+    try {
+      for (const journal of game.journal?.contents || []) {
+        for (const page of journal.pages?.contents || []) {
+          if (String(this.getPageArchivistMeta(page).id || '') === wanted) {
+            return page;
+          }
+        }
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    return null;
+  }
+
   /**
    * True if this journal or any of its pages represents the Archivist record.
    * Legacy location/faction imports lived as JournalEntryPages; a standalone
@@ -1636,6 +1750,19 @@ export class Utils {
             imageUrl !== undefined ? imageUrl || null : priorFlags.image || null,
         });
         return existing;
+      }
+
+      // A legacy location/faction page already represents this record. Avoid
+      // creating a duplicate, and do not repurpose its shared parent journal.
+      const legacyPage = archivistId
+        ? this.findJournalPageByArchivistId(archivistId)
+        : null;
+      if (legacyPage) {
+        console.log(
+          '[Archivist Sync] Skipping standalone import; legacy journal page already represents record:',
+          { pageId: legacyPage.id, archivistId, sheetType: normalizedType }
+        );
+        return null;
       }
 
       const createData = {
