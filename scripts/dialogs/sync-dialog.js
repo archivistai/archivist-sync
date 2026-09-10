@@ -744,8 +744,12 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
             // to clear a stale Foundry page.
             let differs;
             if (String(type) === 'Journal') {
+              const storedHtml =
+                Number(textPage?.text?.format ?? 0) === 2
+                  ? Utils.markdownToStoredHtml(stored)
+                  : stored;
               differs =
-                this._normalizeHtmlForComparison(stored) !==
+                this._normalizeHtmlForComparison(storedHtml) !==
                 this._normalizeHtmlForComparison(archHtml);
             } else {
               const foundryNormalized = this._normalizeTextForComparison(
