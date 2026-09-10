@@ -570,25 +570,34 @@ export class Utils {
   static _scanMarkdownDestination(str, start) {
     const len = str.length;
     let i = start;
-    let depth = 0;
-    while (i < len) {
-      const ch = str[i];
-      if (ch === '(') {
-        depth += 1;
+    let href;
+    if (str.startsWith('&lt;', start)) {
+      const closeIdx = str.indexOf('&gt;', start + 4);
+      if (closeIdx === -1) return null;
+      href = str.slice(start + 4, closeIdx);
+      if (!href || href.includes('&lt;')) return null;
+      i = closeIdx + 4;
+    } else {
+      let depth = 0;
+      while (i < len) {
+        const ch = str[i];
+        if (ch === '(') {
+          depth += 1;
+          i += 1;
+          continue;
+        }
+        if (ch === ')') {
+          if (depth === 0) break;
+          depth -= 1;
+          i += 1;
+          continue;
+        }
+        if (/\s/.test(ch)) break;
         i += 1;
-        continue;
       }
-      if (ch === ')') {
-        if (depth === 0) break;
-        depth -= 1;
-        i += 1;
-        continue;
-      }
-      if (/\s/.test(ch)) break;
-      i += 1;
+      if (i === start) return null;
+      href = str.slice(start, i);
     }
-    if (i === start) return null;
-    const href = str.slice(start, i);
 
     let idx = i;
     let title;
@@ -677,32 +686,77 @@ export class Utils {
       .replace(/(?<!\w)[*_](?=\S)(.+?)(?<=\S)[*_](?!\w)/g, '<em>$1</em>');
   }
 
+  /** Replace code spans whose opening and closing backtick runs match. */
+  static _replaceMarkdownCodeSpans(str, park) {
+    let out = '';
+    let i = 0;
+    while (i < str.length) {
+      const openIdx = str.indexOf('`', i);
+      if (openIdx === -1) {
+        out += str.slice(i);
+        break;
+      }
+      out += str.slice(i, openIdx);
+      let openEnd = openIdx;
+      while (str[openEnd] === '`') openEnd += 1;
+      const delimiterLength = openEnd - openIdx;
+
+      let searchIdx = openEnd;
+      let closeIdx = -1;
+      let closeEnd = -1;
+      while (searchIdx < str.length) {
+        const candidate = str.indexOf('`', searchIdx);
+        if (candidate === -1) break;
+        let candidateEnd = candidate;
+        while (str[candidateEnd] === '`') candidateEnd += 1;
+        if (candidateEnd - candidate === delimiterLength) {
+          closeIdx = candidate;
+          closeEnd = candidateEnd;
+          break;
+        }
+        searchIdx = candidateEnd;
+      }
+
+      if (closeIdx === -1) {
+        out += str.slice(openIdx, openEnd);
+        i = openEnd;
+        continue;
+      }
+      out += park('<code>' + str.slice(openEnd, closeIdx) + '</code>');
+      i = closeEnd;
+    }
+    return out;
+  }
+
   /**
    * Render inline markdown (emphasis, code, backslash escapes) to HTML.
-   * Escapes HTML first so generated tags are not re-escaped into literal text.
+   * Protects Markdown escapes before HTML encoding so escaped angle brackets
+   * cannot be mistaken for autolinks.
    * @param {string} text
    * @returns {string}
    */
   static _renderMarkdownInline(text) {
-    const escaped = foundry.utils.escapeHTML(String(text ?? ''));
     const parked = [];
     const park = (value) => '\uE000' + (parked.push(value) - 1) + '\uE001';
-    const withoutEscapes = escaped.replace(
-      /\\([\\`*_[\]#>+.\-!()])/g,
-      (_m, ch) => park(ch)
+    const protectedEscapes = String(text ?? '').replace(
+      /\\([\x21-\x2F\x3A-\x40\x5B-\x60\x7B-\x7E])/g,
+      (_m, ch) => park(foundry.utils.escapeHTML(ch))
     );
-    const withoutCode = withoutEscapes.replace(/`([^`]+?)`/g, (_m, inner) =>
-      park('<code>' + inner + '</code>')
-    );
+    const escaped = foundry.utils.escapeHTML(protectedEscapes);
+    const withoutCode = this._replaceMarkdownCodeSpans(escaped, park);
     const withoutImages = this._replaceMarkdownLinks(withoutCode, true, park);
     const withoutLinks = this._replaceMarkdownLinks(withoutImages, false, park);
     const withoutAutolinks = withoutLinks.replace(
-      /&lt;(?:(https?:\/\/.+?)|(mailto:[^\s&<>]+?)|([^\s&<>]+@[^\s&<>]+?))&gt;/gi,
-      (m, httpHref, mailtoHref, email) => {
-        const href = httpHref || mailtoHref || 'mailto:' + email;
+      /&lt;([^\s<>]+?)&gt;/gi,
+      (m, value) => {
+        const isHttp = /^https?:\/\//i.test(value);
+        const isMailto = /^mailto:/i.test(value);
+        const isEmail = !isMailto && /^[^@\s<>]+@[^@\s<>]+$/.test(value);
+        if (!isHttp && !isMailto && !isEmail) return m;
+        const href = isEmail ? 'mailto:' + value : value;
         const safe = this._safeMarkdownHref(href);
         if (!safe) return m;
-        const linkText = httpHref || mailtoHref ? safe : email;
+        const linkText = isEmail ? value : safe;
         return park('<a href="' + safe + '">' + linkText + '</a>');
       }
     );
