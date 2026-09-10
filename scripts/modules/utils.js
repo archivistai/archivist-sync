@@ -659,7 +659,7 @@ export class Utils {
       }
       out += str.slice(i, idx);
       const labelStart = idx + marker.length;
-      const labelEnd = str.indexOf(']', labelStart);
+      const labelEnd = this._scanMarkdownLabelEnd(str, labelStart);
       const validLabel = isImage
         ? labelEnd !== -1
         : labelEnd !== -1 && labelEnd > labelStart;
@@ -704,6 +704,20 @@ export class Utils {
     return out;
   }
 
+  /** Find the closing bracket paired with a Markdown link/image label. */
+  static _scanMarkdownLabelEnd(str, start) {
+    let depth = 0;
+    for (let i = start; i < str.length; i += 1) {
+      if (str[i] === '[') {
+        depth += 1;
+      } else if (str[i] === ']') {
+        if (depth === 0) return i;
+        depth -= 1;
+      }
+    }
+    return -1;
+  }
+
   /** Apply the non-structural emphasis passes used by the inline fallback. */
   static _formatMarkdownInline(text) {
     return String(text ?? '')
@@ -718,7 +732,15 @@ export class Utils {
     let out = '';
     let i = 0;
     while (i < str.length) {
-      const openIdx = str.indexOf('`', i);
+      let openIdx = str.indexOf('`', i);
+      while (openIdx !== -1) {
+        let slashes = 0;
+        for (let j = openIdx - 1; j >= 0 && str[j] === '\\'; j -= 1) {
+          slashes += 1;
+        }
+        if (slashes % 2 === 0) break;
+        openIdx = str.indexOf('`', openIdx + 1);
+      }
       if (openIdx === -1) {
         out += str.slice(i);
         break;
@@ -749,7 +771,11 @@ export class Utils {
         i = openEnd;
         continue;
       }
-      out += park('<code>' + str.slice(openEnd, closeIdx) + '</code>');
+      out += park(
+        '<code>' +
+          foundry.utils.escapeHTML(str.slice(openEnd, closeIdx)) +
+          '</code>'
+      );
       i = closeEnd;
     }
     return out;
@@ -768,13 +794,16 @@ export class Utils {
     // Private-use delimiters keep ordinary journal text out of the restore pass.
     const parked = [];
     const park = (value) => '\uE000' + (parked.push(value) - 1) + '\uE001';
-    const protectedEscapes = String(text ?? '').replace(
+    const withoutCode = this._replaceMarkdownCodeSpans(
+      String(text ?? ''),
+      park
+    );
+    const protectedEscapes = withoutCode.replace(
       /\\([\x21-\x2F\x3A-\x40\x5B-\x60\x7B-\x7E])/g,
       (_m, ch) => park(foundry.utils.escapeHTML(ch))
     );
     const escaped = foundry.utils.escapeHTML(protectedEscapes);
-    const withoutCode = this._replaceMarkdownCodeSpans(escaped, park);
-    const withoutImages = this._replaceMarkdownLinks(withoutCode, true, park);
+    const withoutImages = this._replaceMarkdownLinks(escaped, true, park);
     const withoutLinks = this._replaceMarkdownLinks(withoutImages, false, park);
     const withoutAutolinks = withoutLinks.replace(
       /&lt;([^\s<>]+?)&gt;/gi,
