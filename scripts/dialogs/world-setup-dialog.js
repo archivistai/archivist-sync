@@ -2802,15 +2802,17 @@ export class WorldSetupDialog extends foundry.applications.api.HandlebarsApplica
           sort: sortValue,
         });
         if (journal) {
-          if (s.session_date) {
-            try {
+          try {
+            if (s.session_date) {
               await journal.setFlag(
                 CONFIG.MODULE_ID,
                 'sessionDate',
                 String(s.session_date)
               );
-            } catch (_) {}
-          }
+            } else {
+              await journal.unsetFlag(CONFIG.MODULE_ID, 'sessionDate');
+            }
+          } catch (_) {}
         }
       }
 

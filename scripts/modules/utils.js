@@ -772,7 +772,11 @@ export class Utils {
       /\\([\x21-\x2F\x3A-\x40\x5B-\x60\x7B-\x7E])/g,
       (_m, ch) => park(foundry.utils.escapeHTML(ch))
     );
-    const escaped = foundry.utils.escapeHTML(protectedEscapes);
+    const protectedReferences = protectedEscapes.replace(
+      /&(?:#\d{1,7}|#x[\da-f]{1,6}|[a-z][a-z\d]{1,31});/gi,
+      (reference) => park(reference)
+    );
+    const escaped = foundry.utils.escapeHTML(protectedReferences);
     const withoutImages = this._replaceMarkdownLinks(escaped, true, park);
     const withoutLinks = this._replaceMarkdownLinks(withoutImages, false, park);
     const withoutAutolinks = withoutLinks.replace(
@@ -892,9 +896,9 @@ export class Utils {
           i += 1;
         }
         out.push(
-          '<blockquote><p>' +
-            this._renderMarkdownInline(body.join('\n')).replace(/\n/g, '<br>') +
-            '</p></blockquote>'
+          '<blockquote>' +
+            this._renderMarkdownFallback(body.join('\n')) +
+            '</blockquote>'
         );
         continue;
       }
@@ -999,6 +1003,48 @@ export class Utils {
     );
   }
 
+  /** Return only text that is outside complete HTML elements. */
+  static _textOutsideHtmlElements(text) {
+    const source = String(text ?? '').replace(/<!--[\s\S]*?-->/g, (comment) =>
+      comment.replace(/[^\n]/g, '')
+    );
+    const voidTags = new Set([
+      'area',
+      'base',
+      'br',
+      'col',
+      'embed',
+      'hr',
+      'img',
+      'input',
+      'link',
+      'meta',
+      'param',
+      'source',
+      'track',
+      'wbr',
+    ]);
+    const tag = /<\/?([a-z][\w-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
+    const stack = [];
+    let outside = '';
+    let cursor = 0;
+    for (const match of source.matchAll(tag)) {
+      const between = source.slice(cursor, match.index);
+      outside += stack.length ? between.replace(/[^\n]/g, '') : between;
+      const name = match[1].toLowerCase();
+      if (/^<\//.test(match[0])) {
+        const openIdx = stack.lastIndexOf(name);
+        if (openIdx !== -1) stack.length = openIdx;
+      } else if (!voidTags.has(name) && !/\/\s*>$/.test(match[0])) {
+        stack.push(name);
+      }
+      cursor = match.index + match[0].length;
+    }
+    const tail = source.slice(cursor);
+    outside += stack.length ? tail.replace(/[^\n]/g, '') : tail;
+    return outside;
+  }
+
   /**
    * True for stored Foundry HTML, not for Markdown that happens to contain
    * angle brackets or an inline tag. `<https://example.com>` is a CommonMark
@@ -1021,15 +1067,22 @@ export class Utils {
       .replace(/<https?:\/\/[^>\s]+>/gi, ' ')
       .replace(/<mailto:[^>\s]+>/gi, ' ')
       .replace(/<[^\s<>]+@[^\s<>]+>/g, ' ');
+    const outsideHtmlElements = this._textOutsideHtmlElements(withoutAutolinks);
+    const hasMarkdownBlock = outsideHtmlElements
+      .split('\n')
+      .some((line) =>
+        /^\s*(?:#{1,6}\s|>|(?:[-*+]|\d+[.)])\s+|[`~]{3,}|(?:[-*_]\s*){3,}\s*$)/.test(
+          line
+        )
+      );
+    if (hasMarkdownBlock) return false;
     const startsWithHtmlTag =
       /^\s*<\/?(?:p|div|span|br|hr|h[1-6]|ul|ol|li|pre|code|blockquote|strong|em|a|img|table|thead|tbody|tr|td|th|section|article|header|footer|main|aside|figure|figcaption)\b/i.test(
         withoutAutolinks
       );
-    // A document that clearly opens with an HTML tag is stored HTML, even if
-    // a later line — inside a `<pre>`/`<code>` block, say — happens to look
-    // like Markdown block syntax (a shell comment such as `# comment`).
-    // Check this first so a code sample can't fool the Markdown-block scan
-    // below into a false negative.
+    // Complete HTML elements (including pre/code contents) were removed before
+    // checking for Markdown blocks, so a leading inline tag cannot conceal a
+    // later heading, list, quote, rule, or fence.
     if (startsWithHtmlTag) return true;
     // Markdown with an incidental inline tag (`# Title` plus a <span>) must
     // still go through the renderer. A document that doesn't open with an
@@ -1840,12 +1893,20 @@ export class Utils {
       const legacyPage = archivistId
         ? this.findJournalPageByArchivistId(archivistId)
         : null;
-      if (legacyPage) {
+      const migrateLegacyPage =
+        legacyPage && ['location', 'faction'].includes(normalizedType);
+      if (legacyPage && !migrateLegacyPage) {
         console.log(
           '[Archivist Sync] Skipping standalone import; legacy journal page already represents record:',
           { pageId: legacyPage.id, archivistId, sheetType: normalizedType }
         );
         return null;
+      }
+      if (migrateLegacyPage) {
+        console.log(
+          '[Archivist Sync] Migrating legacy journal page to standalone sheet:',
+          { pageId: legacyPage.id, archivistId, sheetType: normalizedType }
+        );
       }
 
       const createData = {
@@ -1884,6 +1945,22 @@ export class Utils {
         },
         foundryRefs: { actors: [], items: [], scenes: [], journals: [] },
       });
+
+      if (migrateLegacyPage) {
+        try {
+          // Clear the remote identity before deletion so realtime hooks do not
+          // interpret this local representation migration as an Archivist delete.
+          await legacyPage.unsetFlag(CONFIG.MODULE_ID, 'archivistId');
+          await legacyPage.unsetFlag(CONFIG.MODULE_ID, 'archivistType');
+          await legacyPage.unsetFlag(CONFIG.MODULE_ID, 'archivistWorldId');
+          await legacyPage.delete();
+        } catch (migrationError) {
+          console.warn(
+            '[Archivist Sync] Standalone sheet created, but legacy page cleanup failed:',
+            migrationError
+          );
+        }
+      }
 
       console.log(
         `[Archivist Sync] Journal finalized with flags, final location:`,

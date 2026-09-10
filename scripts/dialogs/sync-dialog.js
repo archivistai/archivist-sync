@@ -1226,13 +1226,17 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
       }
     }
     // For sessions, set sessionDate flag for later edits
-    if (sheetType === 'recap' && row.session_date) {
+    if (sheetType === 'recap') {
       try {
-        await journal.setFlag(
-          CONFIG.MODULE_ID,
-          'sessionDate',
-          String(row.session_date)
-        );
+        if (row.session_date) {
+          await journal.setFlag(
+            CONFIG.MODULE_ID,
+            'sessionDate',
+            String(row.session_date)
+          );
+        } else {
+          await journal.unsetFlag(CONFIG.MODULE_ID, 'sessionDate');
+        }
       } catch (_) {}
     }
     // Ensure chronological ordering within the Recaps folder (oldest -> newest)
