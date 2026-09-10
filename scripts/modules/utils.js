@@ -651,7 +651,9 @@ export class Utils {
       out += str.slice(i, idx);
       const labelStart = idx + marker.length;
       const labelEnd = str.indexOf(']', labelStart);
-      const validLabel = isImage ? labelEnd !== -1 : labelEnd !== -1 && labelEnd > labelStart;
+      const validLabel = isImage
+        ? labelEnd !== -1
+        : labelEnd !== -1 && labelEnd > labelStart;
       if (!validLabel || str[labelEnd + 1] !== '(') {
         out += marker[0];
         i = idx + 1;
@@ -680,11 +682,26 @@ export class Utils {
           '<img src="' + safe + '" alt="' + label + '"' + titleAttr + '>'
         );
       } else {
-        out += park('<a href="' + safe + '"' + titleAttr + '>' + label + '</a>');
+        // Link labels support the same emphasis syntax as surrounding inline
+        // text. Existing parked code/escape tokens are restored after the
+        // complete anchor is restored, so they remain isolated here.
+        const renderedLabel = this._formatMarkdownInline(label);
+        out += park(
+          '<a href="' + safe + '"' + titleAttr + '>' + renderedLabel + '</a>'
+        );
       }
       i = dest.end;
     }
     return out;
+  }
+
+  /** Apply the non-structural emphasis passes used by the inline fallback. */
+  static _formatMarkdownInline(text) {
+    return String(text ?? '')
+      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/~~(.+?)~~/g, '<s>$1</s>')
+      .replace(/(?<!\w)[*_](?=\S)(.+?)(?<=\S)[*_](?!\w)/g, '<em>$1</em>');
   }
 
   /**
@@ -697,10 +714,9 @@ export class Utils {
     const escaped = foundry.utils.escapeHTML(String(text ?? ''));
     // Park backslash-escapes and code spans so later emphasis passes cannot
     // see their punctuation (code like **literal** in backticks stays literal).
-    // Tokens are NUL-delimited so ordinary digits in the journal are not eaten
-    // by the restore pass.
+    // Private-use delimiters keep ordinary journal text out of the restore pass.
     const parked = [];
-    const park = (value) => '\u0000' + (parked.push(value) - 1) + '\u0000';
+    const park = (value) => '\uE000' + (parked.push(value) - 1) + '\uE001';
     const withoutEscapes = escaped.replace(
       /\\([\\`*_[\]#>+.\-!()])/g,
       (_m, ch) => park(ch)
@@ -720,12 +736,20 @@ export class Utils {
         return park('<a href="' + safe + '">' + linkText + '</a>');
       }
     );
-    const formatted = withoutAutolinks
-      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/~~(.+?)~~/g, '<s>$1</s>')
-      .replace(/(?<!\w)[*_](?=\S)(.+?)(?<=\S)[*_](?!\w)/g, '<em>$1</em>');
-    return formatted.replace(/\u0000(\d+)\u0000/g, (_m, i) => parked[Number(i)] ?? '');
+    const formatted = this._formatMarkdownInline(withoutAutolinks);
+
+    // Parked constructs may contain earlier tokens (for example a backslash
+    // escape inside a code span or link). Restore until no token remains;
+    // each token can only reference an earlier entry, so this is bounded by
+    // the number of parked values and cannot cycle.
+    const token = /\uE000(\d+)\uE001/g;
+    let restored = formatted;
+    for (let pass = 0; pass <= parked.length; pass += 1) {
+      const next = restored.replace(token, (_m, i) => parked[Number(i)] ?? '');
+      if (next === restored) break;
+      restored = next;
+    }
+    return restored;
   }
 
   /**
@@ -1688,6 +1712,24 @@ export class Utils {
     return null;
   }
 
+  /** Find a legacy JournalEntryPage representation of an Archivist record. */
+  static findJournalPageByArchivistId(archivistId) {
+    const wanted = String(archivistId || '');
+    if (!wanted) return null;
+    try {
+      for (const journal of game.journal?.contents || []) {
+        for (const page of journal.pages?.contents || []) {
+          if (String(this.getPageArchivistMeta(page).id || '') === wanted) {
+            return page;
+          }
+        }
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    return null;
+  }
+
   /**
    * True if this journal or any of its pages represents the Archivist record.
    * Legacy location/faction imports lived as JournalEntryPages; a standalone
@@ -1705,6 +1747,23 @@ export class Utils {
       for (const page of journal.pages?.contents || []) {
         if (String(this.getPageArchivistMeta(page).id || '') === wanted)
           return true;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    return false;
+  }
+
+  /** True if any linked Actor, Item, or Scene still references this record. */
+  static coreDocumentReferencesArchivistId(archivistId) {
+    const wanted = String(archivistId || '');
+    if (!wanted) return false;
+    try {
+      for (const collection of [game.actors, game.items, game.scenes]) {
+        for (const doc of collection?.contents || []) {
+          const id = doc?.getFlag?.(CONFIG.MODULE_ID, 'archivistId');
+          if (String(id || '') === wanted) return true;
+        }
       }
     } catch (_) {
       /* ignore */
@@ -1794,6 +1853,20 @@ export class Utils {
             imageUrl !== undefined ? imageUrl || null : priorFlags.image || null,
         });
         return existing;
+      }
+
+      // Legacy location/faction imports store the Archivist id on a page in
+      // a shared journal. Treat that page as an existing import, but do not
+      // repurpose its parent journal as a standalone custom sheet.
+      const legacyPage = archivistId
+        ? this.findJournalPageByArchivistId(archivistId)
+        : null;
+      if (legacyPage) {
+        console.log(
+          '[Archivist Sync] Skipping standalone import; legacy journal page already represents record:',
+          { pageId: legacyPage.id, archivistId, sheetType: normalizedType }
+        );
+        return null;
       }
 
       const createData = {

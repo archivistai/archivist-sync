@@ -173,8 +173,11 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
     if (!scope) return;
     // Select All arms updates, never deletions. A deletion is irreversible in
     // both systems, so it stays an explicit per-row choice.
-    if (scope === 'diffs')
-      this.model.diffs.forEach((d) => (d.selected = !d.deleted));
+    if (scope === 'diffs') {
+      this.model.diffs.forEach((d) => {
+        if (!d.deleted) d.selected = true;
+      });
+    }
     if (scope === 'imports')
       this.model.imports.forEach((i) => (i.selected = true));
     this._captureScrollPosition();
@@ -475,14 +478,14 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
     const parked = [];
     const withoutCode = src.replace(
       /<(pre|code)\b[^>]*>[\s\S]*?<\/\1>/gi,
-      (m) => `\u0000${parked.push(m) - 1}\u0000`
+      (m) => `\uE000${parked.push(m) - 1}\uE001`
     );
     const normalized = withoutCode
       .replace(/[^\S\n]+/g, ' ')
       .replace(/>\s+</g, '><')
       .trim();
     return normalized.replace(
-      /\u0000(\d+)\u0000/g,
+      /\uE000(\d+)\uE001/g,
       (_m, i) => parked[Number(i)] ?? ''
     );
   }
