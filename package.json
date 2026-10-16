@@ -4,6 +4,7 @@
   "description": "A simple Foundry VTT module for fetching world data from an API endpoint using an API key.",
   "type": "module",
   "scripts": {
+    "test": "node --test tests/*.test.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
