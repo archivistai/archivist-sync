@@ -99,9 +99,19 @@ export class ArchivistApiService {
     q.failureConditions =
       q.failureConditions ?? q.failure_conditions ?? '';
     q.nextAction = q.nextAction ?? q.next_action ?? '';
-    q.progressLog = q.progressLog ?? q.progress_log ?? [];
     q.progressLogEntries =
       q.progressLogEntries ?? q.progress_log_entries ?? [];
+    // Detail responses may expose only the read-only entry shape. Promote those
+    // entries into progressLog (as text) rather than defaulting it to [], which
+    // downstream consumers would pick over the populated entries.
+    q.progressLog =
+      q.progressLog ??
+      q.progress_log ??
+      (q.progressLogEntries.length
+        ? q.progressLogEntries.map((e) =>
+            typeof e === 'string' ? e : e?.text || ''
+          )
+        : []);
     q.relatedCharacters =
       q.relatedCharacters ?? q.related_characters ?? [];
     q.relatedFactions = q.relatedFactions ?? q.related_factions ?? [];
@@ -1400,7 +1410,13 @@ export class ArchivistApiService {
         if (page >= totalPages || items.length < size) break;
         page += 1;
       }
-      return { success: true, data: all };
+      // The paginated endpoint returns QuestSummary rows. Structured quest data
+      // (objectives and progress logs) only exists on the detail endpoint, but
+      // every Foundry sync consumer needs those fields when creating or diffing
+      // quest sheets. Hydrate summaries here so callers cannot accidentally
+      // interpret omitted fields as empty arrays and erase/hide quest details.
+      const hydrated = await this._hydrateQuestDetails(apiKey, all);
+      return { success: true, data: hydrated };
     } catch (error) {
       console.error(`${CONFIG.MODULE_TITLE} | Failed to list quests:`, error);
       return {
@@ -1408,6 +1424,59 @@ export class ArchivistApiService {
         message: error.message || 'Failed to list quests',
       };
     }
+  }
+
+  /**
+   * Expand quest summary rows into full QuestRead payloads.
+   *
+   * Detail requests are processed by a small worker pool to avoid a large quest
+   * log overwhelming the API. If one detail request fails, retain the summary;
+   * sync can still import the quest rather than failing the entire campaign.
+   * @param {string} apiKey
+   * @param {Array<object>} quests
+   * @returns {Promise<Array<object>>}
+   */
+  async _hydrateQuestDetails(apiKey, quests) {
+    const rows = Array.isArray(quests) ? quests : [];
+    const results = new Array(rows.length);
+    let nextIndex = 0;
+    const workerCount = Math.min(4, rows.length);
+
+    const worker = async () => {
+      while (nextIndex < rows.length) {
+        const index = nextIndex++;
+        const row = rows[index] || {};
+        const hasStructuredDetails =
+          Object.hasOwn(row, 'objectives') &&
+          (Object.hasOwn(row, 'progressLog') ||
+            Object.hasOwn(row, 'progress_log') ||
+            Object.hasOwn(row, 'progressLogEntries') ||
+            Object.hasOwn(row, 'progress_log_entries'));
+
+        if (hasStructuredDetails || !row.id) {
+          results[index] = this._normalizeQuestResponse(row);
+          continue;
+        }
+
+        try {
+          const detail = await this._request(
+            apiKey,
+            `/quests/${encodeURIComponent(row.id)}`,
+            { method: 'GET' }
+          );
+          results[index] = this._normalizeQuestResponse({ ...row, ...detail });
+        } catch (error) {
+          console.warn(
+            `${CONFIG.MODULE_TITLE} | Failed to hydrate quest ${row.id}; using summary`,
+            error
+          );
+          results[index] = this._normalizeQuestResponse(row);
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return results;
   }
 
   /**

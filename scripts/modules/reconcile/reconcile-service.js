@@ -187,7 +187,9 @@ export class ReconcileService {
       let fullQuest = q;
       // List rows may omit nested fields; _normalizeQuestResponse defaults
       // relatedEntityRefs to [] so always fetch the full quest before writing flags.
-      if (q.id) {
+      // listQuests() already hydrates rows with objectives; only refetch when
+      // hydration fell back to the summary, to avoid a second GET per quest.
+      if (q.id && !Array.isArray(q.objectives)) {
         try {
           const resp = await archivistApi.getQuest(apiKey, q.id);
           if (resp.success && resp.data) {
