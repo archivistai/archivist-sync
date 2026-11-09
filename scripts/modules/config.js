@@ -123,6 +123,14 @@ export const SETTINGS = {
     default: '[]',
   },
 
+  USER_CHAT_HISTORY: {
+    key: 'userChatHistory',
+    scope: 'user',
+    config: false,
+    type: Object,
+    default: {},
+  },
+
   CHAT_HISTORY_ENABLED: {
     key: 'chatHistoryEnabled',
     name: 'ARCHIVIST_SYNC.Settings.ChatHistoryEnabled.Name',
