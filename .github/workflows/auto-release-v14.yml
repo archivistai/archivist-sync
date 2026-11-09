@@ -184,7 +184,14 @@ jobs:
         run: |
           # Extract changelog section for this version
           if [ -f CHANGELOG.md ]; then
-            awk "/## \[$VERSION\]/,/## \[/" CHANGELOG.md | sed '$d' > release_notes.md
+            # Print from this version's heading up to (not including) the next
+            # "## [" heading. A /start/,/end/ range would end on the heading line
+            # itself, because it also matches "## [", and leave the notes empty.
+            awk -v v="$VERSION" '
+              index($0, "## [" v "]") == 1 { found = 1; print; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' CHANGELOG.md > release_notes.md
           fi
 
           # If release notes are empty, use a default message
