@@ -5,7 +5,7 @@ import { archivistApi } from '../services/archivist-api.js';
 
 /**
  * Standalone Archivist Chat window (per-user)
- * Maintains local chat history (client-scoped setting), trims to last 10 turns when sending.
+ * Stores each user's chat history by campaign and trims it when sending.
  */
 export class AskChatWindow {
   constructor(options = {}) {
@@ -23,6 +23,13 @@ export class AskChatWindow {
         SETTINGS.CHAT_HISTORY_ENABLED.key
       );
       if (!enabled) return [];
+      const history = game.settings.get(
+        CONFIG.MODULE_ID,
+        SETTINGS.USER_CHAT_HISTORY.key
+      );
+      const campaign = this._historyCampaign();
+      // An empty array is intentional after a user clears their history.
+      if (Array.isArray(history?.[campaign])) return history[campaign];
       const raw =
         game.settings.get(CONFIG.MODULE_ID, SETTINGS.CHAT_HISTORY.key) || '{}';
       const byUser = JSON.parse(raw);
@@ -33,22 +40,21 @@ export class AskChatWindow {
     }
   }
 
-  _saveHistory() {
+  async _saveHistory() {
     try {
       const enabled = !!game.settings.get(
         CONFIG.MODULE_ID,
         SETTINGS.CHAT_HISTORY_ENABLED.key
       );
       if (!enabled) return;
-      const raw =
-        game.settings.get(CONFIG.MODULE_ID, SETTINGS.CHAT_HISTORY.key) || '{}';
-      const byUser = JSON.parse(raw || '{}');
-      const key = this._historyKey();
-      byUser[key] = this._messages.slice(-40); // keep more locally, trim on send
-      game.settings.set(
+      const history = game.settings.get(
         CONFIG.MODULE_ID,
-        SETTINGS.CHAT_HISTORY.key,
-        JSON.stringify(byUser)
+        SETTINGS.USER_CHAT_HISTORY.key
+      );
+      await game.settings.set(
+        CONFIG.MODULE_ID,
+        SETTINGS.USER_CHAT_HISTORY.key,
+        { ...history, [this._historyCampaign()]: this._messages.slice(-40) }
       );
     } catch (e) {
       console.warn('[Archivist Sync] Failed saving chat history', e);
@@ -57,8 +63,11 @@ export class AskChatWindow {
 
   _historyKey() {
     const uid = game.user?.id || 'anon';
-    const wid = settingsManager.getSelectedWorldId() || 'no-world';
-    return `${uid}:${wid}`;
+    return `${uid}:${this._historyCampaign()}`;
+  }
+
+  _historyCampaign() {
+    return settingsManager.getSelectedWorldId() || 'no-world';
   }
 
   async getData() {

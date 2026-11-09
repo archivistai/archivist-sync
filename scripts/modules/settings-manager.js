@@ -775,6 +775,9 @@ export class SettingsManager {
       default: setting.default,
     });
 
+    const { key, ...userHistory } = SETTINGS.USER_CHAT_HISTORY;
+    game.settings.register(this.moduleId, key, userHistory);
+
     const enabled = SETTINGS.CHAT_HISTORY_ENABLED;
     game.settings.register(this.moduleId, enabled.key, {
       name: game.i18n.localize(enabled.name),
