@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.6] - 2026-11-09
+
+### Fixed
+- Quest imports and syncs now keep each quest's objectives and progress log.
+  The paginated quest list only returns summaries, so quests are now filled in
+  from their detail record. Progress that the API returns as entry objects is
+  kept as well, and a full reconcile makes one detail request per quest.
+- Foundry players without the Configure Settings permission can again send
+  Ask Archivist messages, receive responses, and clear chat history. History is
+  now stored per user and keyed by Archivist campaign; existing history is read
+  until the user saves or clears it.
+
+### Changed
+- `npm test` now runs the quest hydration tests together with the sync table
+  sorter tests.
+
 ## [2.0.5] - 2026-10-07
 
 ### Added
