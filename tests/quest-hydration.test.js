@@ -88,3 +88,24 @@ test('listQuests retains the summary when detail hydration fails', async () => {
     console.warn = originalWarn;
   }
 });
+
+test('listQuests promotes entry-shaped progress into progressLog', async () => {
+  const api = new ArchivistApiService();
+  api._request = async (_apiKey, path) => {
+    if (path.startsWith('/quests?')) {
+      return { data: [{ id: 'quest-2' }], pages: 1 };
+    }
+    return {
+      id: 'quest-2',
+      objectives: [],
+      progress_log_entries: [{ text: 'Entered the vault.' }, 'Met the thief.'],
+    };
+  };
+
+  const result = await api.listQuests('key', 'campaign-1');
+
+  assert.deepEqual(result.data[0].progressLog, [
+    'Entered the vault.',
+    'Met the thief.',
+  ]);
+});

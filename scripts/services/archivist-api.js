@@ -99,9 +99,19 @@ export class ArchivistApiService {
     q.failureConditions =
       q.failureConditions ?? q.failure_conditions ?? '';
     q.nextAction = q.nextAction ?? q.next_action ?? '';
-    q.progressLog = q.progressLog ?? q.progress_log ?? [];
     q.progressLogEntries =
       q.progressLogEntries ?? q.progress_log_entries ?? [];
+    // Detail responses may expose only the read-only entry shape. Promote those
+    // entries into progressLog (as text) rather than defaulting it to [], which
+    // downstream consumers would pick over the populated entries.
+    q.progressLog =
+      q.progressLog ??
+      q.progress_log ??
+      (q.progressLogEntries.length
+        ? q.progressLogEntries.map((e) =>
+            typeof e === 'string' ? e : e?.text || ''
+          )
+        : []);
     q.relatedCharacters =
       q.relatedCharacters ?? q.related_characters ?? [];
     q.relatedFactions = q.relatedFactions ?? q.related_factions ?? [];
