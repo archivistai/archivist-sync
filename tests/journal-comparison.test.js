@@ -85,3 +85,12 @@ test('journal sync keeps whitespace written as a reference', () => {
     normalize('<a href="https://example.com/a&#32;b">x</a>')
   );
 });
+
+test('journal sync keeps leading stylesheet elements', () => {
+  const normalize = (html) =>
+    SyncDialog.prototype._normalizeHtmlForComparison(html);
+  assert.notEqual(
+    normalize('<style>p{color:red}</style><p>x</p>'),
+    normalize('<p>x</p>')
+  );
+});

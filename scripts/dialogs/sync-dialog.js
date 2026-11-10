@@ -522,10 +522,13 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
     // Let the browser parse entity references after folding. This keeps
     // text and attribute-value boundaries intact: unescaping `&quot;` in the
     // serialized source could otherwise turn attribute data into a new
-    // attribute and hide a real formatting change.
-    if (typeof DOMParser !== 'undefined') {
-      return new DOMParser().parseFromString(folded, 'text/html').body
-        .innerHTML;
+    // attribute and hide a real formatting change. Parse as a fragment
+    // through an inert <template>: a full-document parse would move leading
+    // <style>, <link> or <meta> into <head> and drop them from the result.
+    if (typeof document !== 'undefined' && document.createElement) {
+      const template = document.createElement('template');
+      template.innerHTML = folded;
+      return template.innerHTML;
     }
     return folded.replace(
       /(<[^>]*>)|&(?:#(\d{1,7})|#[xX]([\da-fA-F]{1,6})|(apos|quot));/g,
