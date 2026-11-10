@@ -531,10 +531,12 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
       /<(pre|code)\b[^>]*>[\s\S]*?<\/\1>/gi,
       (m) => `\uE000${parked.push(m) - 1}\uE001`
     );
+    // Fold only HTML's collapsible whitespace (space, tab, LF, FF). Decoded
+    // Unicode spaces such as U+2003 or U+00A0 render with their own width.
     const normalized = withoutCode
-      .replace(/[^\S\n]+/g, ' ')
-      .replace(/>\s+</g, '><')
-      .trim();
+      .replace(/[ \t\f]+/g, ' ')
+      .replace(/>[ \t\n\f]+</g, '><')
+      .replace(/^[ \t\n\f]+|[ \t\n\f]+$/g, '');
     return normalized.replace(
       /\uE000(\d+)\uE001/g,
       (_m, i) => parked[Number(i)] ?? ''

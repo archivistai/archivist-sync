@@ -59,3 +59,16 @@ test('journal sync ignores other equivalent character references', () => {
     normalize('<p title="a" style="color:red">x</p>')
   );
 });
+
+test('journal sync keeps non-collapsing Unicode spaces distinct', () => {
+  const normalize = (html) =>
+    SyncDialog.prototype._normalizeHtmlForComparison(html);
+  assert.notEqual(normalize('<p>A&#8195;B</p>'), normalize('<p>A B</p>'));
+  assert.notEqual(normalize('<p>A B</p>'), normalize('<p>A B</p>'));
+  assert.equal(normalize('<p>A&#8195;B</p>'), normalize('<p>A B</p>'));
+  // Collapsible HTML whitespace still folds.
+  assert.equal(
+    normalize('<p>A \t B</p>\n<p>C</p>'),
+    normalize('<p>A B</p><p>C</p>')
+  );
+});
