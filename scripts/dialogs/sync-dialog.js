@@ -501,17 +501,22 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
    * @returns {string}
    */
   _normalizeHtmlForComparison(html) {
-    const src = String(html ?? '')
+    const raw = String(html ?? '')
       .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n')
-      // Foundry's HTML editor can serialize characters literally even when
-      // the Markdown renderer emitted an entity (`&#39;`, `&apos;`,
-      // `&#8217;`, `&quot;`). Both display the same character, and treating
-      // them as different makes saved journals recur.
-      .replace(
-        /&(?:#(\d{1,7})|#x([\da-f]{1,6})|(apos|quot));/gi,
-        (ref, dec, hex, named) => {
-          if (named) return named.toLowerCase() === 'apos' ? "'" : '"';
+      .replace(/\r/g, '\n');
+    // Let the browser parse entity references before comparison. This keeps
+    // text and attribute-value boundaries intact: unescaping `&quot;` in the
+    // serialized source could otherwise turn attribute data into a new
+    // attribute and hide a real formatting change.
+    const src = typeof DOMParser !== 'undefined'
+      ? new DOMParser().parseFromString(raw, 'text/html').body.innerHTML
+      : raw.replace(
+        /(<[^>]*>)|&(?:#(\d{1,7})|#[xX]([\da-fA-F]{1,6})|(apos|quot));/g,
+        (ref, tag, dec, hex, named) => {
+          // The fallback is primarily for non-browser tests. Leave markup
+          // untouched so entity values cannot affect attribute boundaries.
+          if (tag) return tag;
+          if (named) return named === 'apos' ? "'" : '"';
           const cp = dec ? parseInt(dec, 10) : parseInt(hex, 16);
           // Keep markup-significant and invalid references as written.
           if (cp === 38 || cp === 60 || cp === 62) return ref;

@@ -49,4 +49,13 @@ test('journal sync ignores other equivalent character references', () => {
   assert.notEqual(normalize('<p>&#60;b&#62;</p>'), normalize('<p><b></p>'));
   // Escaped entity text is still distinct from the character it names.
   assert.notEqual(normalize("<p>'</p>"), normalize('<p>&amp;#39;</p>'));
+  // Named references are case-sensitive in HTML, so unknown variants remain
+  // literal text rather than matching their decoded counterparts.
+  assert.notEqual(normalize("<p>it's</p>"), normalize('<p>it&APOS;s</p>'));
+  // The non-browser fallback never decodes markup, including attributes,
+  // where doing so could move an attribute boundary.
+  assert.notEqual(
+    normalize('<p title="a&quot; style=&quot;color:red">x</p>'),
+    normalize('<p title="a" style="color:red">x</p>')
+  );
 });
