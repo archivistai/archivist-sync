@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.7] - 2026-11-09
+
+### Fixed
+- The sync dialog no longer keeps offering an update for a journal whose
+  content has not changed. Foundry's editor can save apostrophes as plain
+  characters while Archivist renders them as numeric entities (`&#39;` or
+  `&#x27;`). Journal comparison now treats these as the same character, so
+  real text and formatting changes still appear in Review Changes.
+
+### Changed
+- `npm test` also runs the journal comparison tests.
+
 ## [2.0.6] - 2026-11-09
 
 ### Fixed
