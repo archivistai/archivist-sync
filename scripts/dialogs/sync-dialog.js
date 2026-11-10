@@ -504,42 +504,44 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
     const raw = String(html ?? '')
       .replace(/\r\n/g, '\n')
       .replace(/\r/g, '\n');
-    // Let the browser parse entity references before comparison. This keeps
-    // text and attribute-value boundaries intact: unescaping `&quot;` in the
-    // serialized source could otherwise turn attribute data into a new
-    // attribute and hide a real formatting change.
-    const src = typeof DOMParser !== 'undefined'
-      ? new DOMParser().parseFromString(raw, 'text/html').body.innerHTML
-      : raw.replace(
-        /(<[^>]*>)|&(?:#(\d{1,7})|#[xX]([\da-fA-F]{1,6})|(apos|quot));/g,
-        (ref, tag, dec, hex, named) => {
-          // The fallback is primarily for non-browser tests. Leave markup
-          // untouched so entity values cannot affect attribute boundaries.
-          if (tag) return tag;
-          if (named) return named === 'apos' ? "'" : '"';
-          const cp = dec ? parseInt(dec, 10) : parseInt(hex, 16);
-          // Keep markup-significant and invalid references as written.
-          if (cp === 38 || cp === 60 || cp === 62) return ref;
-          if (cp < 1 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
-            return ref;
-          }
-          return String.fromCodePoint(cp);
-        }
-      );
+    // Fold whitespace on the source before decoding entities, so whitespace
+    // written as a reference (`&#32;` between inline tags or inside an
+    // attribute) is kept exactly as written. Fold only HTML's collapsible
+    // whitespace (space, tab, LF, FF); U+2003, U+00A0 and the like render
+    // with their own width.
     const parked = [];
-    const withoutCode = src.replace(
+    const withoutCode = raw.replace(
       /<(pre|code)\b[^>]*>[\s\S]*?<\/\1>/gi,
       (m) => `\uE000${parked.push(m) - 1}\uE001`
     );
-    // Fold only HTML's collapsible whitespace (space, tab, LF, FF). Decoded
-    // Unicode spaces such as U+2003 or U+00A0 render with their own width.
-    const normalized = withoutCode
+    const folded = withoutCode
       .replace(/[ \t\f]+/g, ' ')
       .replace(/>[ \t\n\f]+</g, '><')
-      .replace(/^[ \t\n\f]+|[ \t\n\f]+$/g, '');
-    return normalized.replace(
-      /\uE000(\d+)\uE001/g,
-      (_m, i) => parked[Number(i)] ?? ''
+      .replace(/^[ \t\n\f]+|[ \t\n\f]+$/g, '')
+      .replace(/\uE000(\d+)\uE001/g, (_m, i) => parked[Number(i)] ?? '');
+    // Let the browser parse entity references after folding. This keeps
+    // text and attribute-value boundaries intact: unescaping `&quot;` in the
+    // serialized source could otherwise turn attribute data into a new
+    // attribute and hide a real formatting change.
+    if (typeof DOMParser !== 'undefined') {
+      return new DOMParser().parseFromString(folded, 'text/html').body
+        .innerHTML;
+    }
+    return folded.replace(
+      /(<[^>]*>)|&(?:#(\d{1,7})|#[xX]([\da-fA-F]{1,6})|(apos|quot));/g,
+      (ref, tag, dec, hex, named) => {
+        // The fallback is primarily for non-browser tests. Leave markup
+        // untouched so entity values cannot affect attribute boundaries.
+        if (tag) return tag;
+        if (named) return named === 'apos' ? "'" : '"';
+        const cp = dec ? parseInt(dec, 10) : parseInt(hex, 16);
+        // Keep markup-significant and invalid references as written.
+        if (cp === 38 || cp === 60 || cp === 62) return ref;
+        if (cp < 1 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+          return ref;
+        }
+        return String.fromCodePoint(cp);
+      }
     );
   }
 

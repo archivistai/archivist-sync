@@ -72,3 +72,16 @@ test('journal sync keeps non-collapsing Unicode spaces distinct', () => {
     normalize('<p>A B</p><p>C</p>')
   );
 });
+
+test('journal sync keeps whitespace written as a reference', () => {
+  const normalize = (html) =>
+    SyncDialog.prototype._normalizeHtmlForComparison(html);
+  assert.notEqual(
+    normalize('<strong>A</strong>&#32;<em>B</em>'),
+    normalize('<strong>A</strong><em>B</em>')
+  );
+  assert.notEqual(
+    normalize('<a href="https://example.com/a&#32;&#32;b">x</a>'),
+    normalize('<a href="https://example.com/a&#32;b">x</a>')
+  );
+});
