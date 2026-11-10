@@ -504,10 +504,23 @@ export class SyncDialog extends foundry.applications.api.HandlebarsApplicationMi
     const src = String(html ?? '')
       .replace(/\r\n/g, '\n')
       .replace(/\r/g, '\n')
-      // Foundry's HTML editor can serialize apostrophes literally even when
-      // the Markdown renderer emitted a numeric entity. Both display the same
-      // character, and treating them as different makes saved journals recur.
-      .replace(/&#(?:0*39|x0*27);/gi, "'");
+      // Foundry's HTML editor can serialize characters literally even when
+      // the Markdown renderer emitted an entity (`&#39;`, `&apos;`,
+      // `&#8217;`, `&quot;`). Both display the same character, and treating
+      // them as different makes saved journals recur.
+      .replace(
+        /&(?:#(\d{1,7})|#x([\da-f]{1,6})|(apos|quot));/gi,
+        (ref, dec, hex, named) => {
+          if (named) return named.toLowerCase() === 'apos' ? "'" : '"';
+          const cp = dec ? parseInt(dec, 10) : parseInt(hex, 16);
+          // Keep markup-significant and invalid references as written.
+          if (cp === 38 || cp === 60 || cp === 62) return ref;
+          if (cp < 1 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+            return ref;
+          }
+          return String.fromCodePoint(cp);
+        }
+      );
     const parked = [];
     const withoutCode = src.replace(
       /<(pre|code)\b[^>]*>[\s\S]*?<\/\1>/gi,
